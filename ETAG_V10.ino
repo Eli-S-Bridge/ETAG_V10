@@ -25,17 +25,23 @@
 
   FLASH MEMORY STRUCTURE:
   The onboard flash memory is divided into pages of 528 bytes each. There are probably several thousand pages.
-  Page 0 is reserved for RFID tag codes  (Addresses 0x00000000 to 0x000000??
+  Page 0 is reserved for RFID tag codes.
   Page 1 is reserved for parameters and counters (Addresses 0x00000400 to ??
     bytes 0-2 (0x400 - (0x402) - first three are the current backup memory address
     byte 3 - (0x403) Set to 0xAA once the memory address counter is intialized. (important mainly for the very first initialization process with a completely blank Flash memory)
     bytes 4-7 - (0x404-0x407) next four bytes are for the reader ID charaters
     byte 8 - Set to 0xAA once the Reader ID is established - if this byte is anything other than 0xAA then the Reader ID will be set to the default
-    byte 9 = tagCount (the number of tags stored on page 0)
-    byte 10 = feeder mode
-    byte 11-12 = timeCalFreq - how frequently to calibrate clock with GPS (in minutes)    
+    byte 13 = Logging mode - log to SD in real time or just use Flash
   Page 2 (0x00000800) and the rest is for backup data  
+
+Nov 8, 2019 - Added Memory address lookup - address pointer no longer used. 
+Nov 10, 2019 - Added dual logging modes. 
+Nov 10, 2019 - Fixed bug in sleepTimer function that stopped the clock.
+
 */
+
+
+
 
 // ***********INITIALIZE INCLUDE FILES AND I/O PINS*******************
 #include "RV3129.h"          // include library for the real time clock - must be installed in libraries folder
@@ -63,8 +69,10 @@ String deviceIDstr;                   // String verion of device name.
 String dataFile;                      // Stores text file name for SD card writing.
 String logFile;                       // Stores text file name for SD card writing.
 uint32_t fAddress;                    // Address pointer for logging to backup memory
+uint32_t fAddr = 0x800;
 
-uint32_t pastRFID;                    // stores past RFID number - for use with delayTime
+String currRFID;                      // stores current RFID number and RF circuit - for use with delayTime
+String pastRFID = "XXXXXXXXXX1";       // stores past RFID number and RF circuit - for use with delayTime
 uint32_t pastHHMMSS;                  // stores the past Hour, Minute and Second - for use with delayTime
 
 unsigned int pageAddress;             // page address for flash memory
@@ -75,7 +83,6 @@ String currentDate;                   // USed to get the current date in mm/dd/y
 String currentTime;                   // Used to get the time
 String currentDateTime;               // Full date and time string
 String timeString;                    // String for storing the whole date/time line of data
-char incomingByte = 0;                // Used for incoming serial data
 unsigned int timeIn[12];              // Used for incoming serial data during clock setting
 byte menu;                            // Keeps track of whether the menu is active.
 
@@ -96,10 +103,10 @@ uint16_t pauseCountDown = pauseTime / 31.25;        // Calculate pauseTime for 3
 byte pauseRemainder = ((100*pauseTime)%3125)/100;   // Calculate a delay if the pause period must be accurate
 //byte pauseRemainder = 0 ;                         // ...or set it to zero if accuracy does not matter
 
-const byte slpH = 11;                            // When to go to sleep at night - hour
-const byte slpM = 12;                            // When to go to sleep at night - minute
-const byte wakH = 11;                            // When to wake up in the morning - hour
-const byte wakM = 13;                            // When to wake up in the morning - minute
+const byte slpH = 22;                            // When to go to sleep at night - hour
+const byte slpM = 00;                            // When to go to sleep at night - minute
+const byte wakH = 07;                            // When to wake up in the morning - hour
+const byte wakM = 30;                            // When to wake up in the morning - minute
 const unsigned int slpTime = slpH * 100 + slpM;  // Combined hours and minutes for sleep time
 const unsigned int wakTime = wakH * 100 + wakM;  // Combined hours and minutes for wake time
 
@@ -113,11 +120,8 @@ const unsigned int wakTime = wakH * 100 + wakM;  // Combined hours and minutes f
 unsigned int cycleCount = 0;          // counts read cycles
 unsigned int stopCycleCount = 400;     // How many read cycles to maintain serial comminications
 bool Debug = 1;                       // Use to stop serial messages once sleep mode is used.
-
-
-
-
-
+byte SDOK = 1;
+char logMode;
 
 //////SETUP//////////////SETUP//////////////SETUP//////////////SETUP////////
 
@@ -141,15 +145,6 @@ void setup() {  // setup code goes here, it is run once before anything else
   serial.begin(9600);
   serial.println("Start");
 
-  // Set up SD card communication 
-  serial.println("Initializing SD card...");       // message to user
-  if(SDwriteString("Message", "DUMMY.TXT")) {    // Write a dummy file to the SD card   
-      serial.println("SD card OK");                // OK message
-      SDremoveFile("DUMMY.TXT");                   // delete the dummy file      
-  } else {     
-      serial.println("SD card not working");       // error message
-  }
-
   //Check flash memory and initialize if needed
   serial.print("Is flash memory initialized? ");    //It is neccessary to initialize the flash memory on the first startup
   byte byte0 = readFlashByte(0x00000403);           //Read a particular byte from the flash memory
@@ -163,24 +158,51 @@ void setup() {  // setup code goes here, it is run once before anything else
     serial.println("YES");                          //Confirm initialization
   }
 
-  fAddress = getFlashAddr(); 
-  if (fAddress < 0x00000800) {         // Check to make sure memory address makes sense
-    char fa[3] = {0, 8, 0};            // if not reset flash memory address 
-    writeFlashArray(0x400, fa, 3); 
-  }
-
   if (readFlashByte(0x00000408) != 0xAA) {  //If this byte is not 0xAA then set a default deviceID
     serial.println("Setting default device ID - Please update this!!!");
     deviceID[0] = 'R'; deviceID[1] = 'F'; deviceID[2] = '0'; deviceID[3] = '1';
     writeFlashArray(0x00000404, deviceID, 4);  //write to flash memory without updating flash address
   }
-  
-//  serial.println("pauseTime - pauseCountDown  -  pauseRemainder");
-//  serial.print(pauseTime);
-//  serial.print("        ");
-//  serial.print(pauseCountDown);
-//  serial.print("        ");
-//  serial.println(pauseRemainder);
+
+  //Read in parameters and display parameters from the flash memory
+    //Get and display the device ID
+    readFlashArray(0x404, deviceID, 4);   //Read in device ID
+     //serial.println(deviceID);             //Display device ID
+
+   //Find the flash address
+   fAddr = FlashGetAddr(12);
+ 
+  logMode = readFlashByte(0x0000040D);
+  if(logMode != 'S' & logMode != 'F') { //If log mode is not established then do so
+    serial.println("Setting log mode to SD card");
+    writeFlashByte(0x0000040D, 0x53);    //hex 53 is "S"
+    logMode = 'S';
+  }
+  if(logMode == 'S'){
+    serial.println("Logging mode S");
+    serial.println("Data saved immediately SD card and Flash Mem");
+  } else {
+    serial.println("Logging mode F");
+    serial.println("Data saved to Flash Mem only (no SD card needed)");
+    SDOK = 0;     //Turns off SD logging
+  }
+
+    // Set up SD card communication 
+  serial.println("Initializing SD card...");       // message to user
+  if(SDwriteString("Message", "DUMMY.TXT")) {    // Write a dummy file to the SD card   
+      serial.println("SD card OK");                // OK message
+      SDremoveFile("DUMMY.TXT");                   // delete the dummy file  
+      if(logMode == 'F') {writeMem(0);}          //Write flash memory
+  } else {     
+      serial.println("SD card not detected.");       // error message
+      if(logMode == 'S') {;
+        for(byte i = 0; i < 4; i++) {
+          serial.println("SD card not detected.");       // error message
+          blinkLED(LED_RFID, 1, 1000);                 // LED on for warning
+          SDOK = 2;                       //indicates SD card not detected
+        }
+      }
+  }
 
   // start clock functions and check time
   Wire.begin();  //Start I2C bus to communicate with clock.
@@ -190,6 +212,7 @@ void setup() {  // setup code goes here, it is run once before anything else
     rtc.set24Hour();
   }
 
+
   //////////////MENU////////////MENU////////////MENU////////////MENU////////
   //Display all of the following each time the main menu is called up.
   
@@ -198,19 +221,12 @@ void setup() {  // setup code goes here, it is run once before anything else
     serial.println();
     rtc.updateTime();
     serial.println(showTime());
-    
-    //Read in parameters and display parameters from the flash memory
-    //Get and display the device ID
-    readFlashArray(0x404, deviceID, 4);   //Read in device ID
-    serial.println("Device ID: " + String(deviceID));          //Display device ID
-    //serial.println(deviceID);             //Display device ID
-
-    //Read and display flash memory address
-    fAddress = getFlashAddr(); 
-    serial.print("Flash memory address: Page ");
-    serial.print(fAddress >> 10, DEC);
+    serial.println("Device ID: " + String(deviceID)); //Display device ID
+    serial.println("Logging mode: " + String(logMode)); //Display logging mode
+    serial.print("Flash memory address: Page ");      //Display flash memory address
+    serial.print(fAddr >> 10, DEC);
     serial.print(" - Byte ");
-    serial.println(fAddress & 0x3FF, DEC);
+    serial.println(fAddr & 0x3FF, DEC);
     
     //Define the log and data files
     deviceIDstr = String(deviceID);
@@ -223,9 +239,11 @@ void setup() {  // setup code goes here, it is run once before anything else
     serial.println("    B = Display backup memory");
     serial.println("    E = Erase (reset) backup memory");
     serial.println("    I = Set device ID");
+    serial.println("    M = Change logging mode");
+    serial.println("    W = Write flash data to SD card");
 
     //Get input from user or wait for timeout
-    incomingByte = getInputByte(10000);
+    char incomingByte = getInputByte(15000);
     String printThis = String("Value recieved: ") + incomingByte;
     serial.println(printThis);
     switch (incomingByte) {                                               // execute whatever option the user selected
@@ -242,21 +260,45 @@ void setup() {  // setup code goes here, it is run once before anything else
           break;       //  break out of this option, menu variable still equals 1 so the menu will display again
         }
       case 'E': {
-          char fa[3] = {0, 8, 0};                          //reset flash memory address to page 2, byte address 0
-          writeFlashArray(0x400, fa, 3);                   //reset flash memory address to page 2, byte address 0
-          serial.println("BACKUP MEMORY RESET");
-          break;       //  break out of this option, menu variable still equals 1 so the menu will display again
+            eraseBackup('s');
+            break;   //  break out of this option, menu variable still equals 1 so the menu will display again
         }
       case 'B': {
           dumpMem(0);
           break;       //  break out of this option, menu variable still equals 1 so the menu will display again
         }
+      case 'M': {
+          logMode = readFlashByte(0x0000040D);
+          if(logMode != 'S') {
+            writeFlashByte(0x0000040D, 0x53);    //hex 53 is "S"
+            serial.println("Logging mode S");
+            serial.println("Data saved immediately SD card and Flash Mem");
+            if(SDOK == 0) {SDOK = 1;}
+          } else {
+            writeFlashByte(0x0000040D, 0x46);    //hex 46 is "F"
+            serial.println("Logging mode F");
+            serial.println("Data saved to Flash Mem only (no SD card needed)");
+            SDOK = 0;
+          }
+          logMode = readFlashByte(0x0000040D);
+          serial.println("log mode variable: ");
+          serial.println(logMode);
+          break;       //  break out of this option, menu variable still equals 1 so the menu will display again
+        }  
+        case 'W': {
+          if (SDOK == 1) {
+            writeMem(0);
+          } else {
+            serial.println("SD card missing");
+          }
+          break;       //  break out of this option, menu variable still equals 1 so the menu will display again
+        }  
     } //end of switch
   } //end of while(menu = 1){
 
   rtc.updateTime();
   String logStr = "Logging started at " + showTime();
-  SDwriteString(logStr, logFile);
+  if(SDOK == 1) {SDwriteString(logStr, logFile);}
   RFcircuit = 1;
 }
 
@@ -275,11 +317,11 @@ void loop() { // Main code is here, it loops forever:
   if (curTimeHHMM == slpTime) {                                // Check to see if it is sleep time
      String SlpStr =  "Entering sleep mode at " + showTime();  // if it's time to sleep make a log message
      if(Debug) serial.println(SlpStr);                         // print log message
-     SDwriteString(SlpStr, logFile);                           // save log message
+     if(SDOK == 1) {SDwriteString(SlpStr, logFile);}           // save log message if SD writes are enabled
      sleepAlarm();                                             // sleep using clock alarm for wakeup
      rtc.updateTime();                                         // get time from clock
      SlpStr =  "Wake up from sleep mode at " + showTime();     // log message
-     SDwriteString(SlpStr, logFile);                           // save log message
+     if(SDOK == 1) {SDwriteString(SlpStr, logFile);}           // save log message if SD writes are enabled
   }
 
 //////Read Tags//////////////Read Tags//////////
@@ -288,16 +330,19 @@ void loop() { // Main code is here, it loops forever:
   if (FastRead(RFcircuit, checkTime, pollTime1) == 1) {
     processTag(RFIDtagArray, RFIDstring, RFIDtagUser, &RFIDtagNumber);                  // Parse tag data into string and hexidecimal formats
     rtc.updateTime();                                                                   // Update time from clock
-    String SDsaveString = String(RFIDstring) + ", " + RFcircuit + ", " + showTime();    // Create a data string
+    String SDsaveString = String(RFIDstring) + ", " + RFcircuit + ", " + showTime();    // Create a data string for SD write
+    if(Debug) serial.println(SDsaveString); 
+    currRFID = String(RFIDstring) + String(RFcircuit);
     uint32_t HHMMSS = rtc.getHours()*10000 + rtc.getMinutes()*100 + rtc.getSeconds();   // Creat a time value
-    if(RFIDtagNumber != pastRFID | (HHMMSS-pastHHMMSS >= delayTime)) {                  // See if the tag read is a recent repeat
-      SDwriteString(SDsaveString, dataFile);                                            // If it's a new read, save to the SD card
-      char flashData[12] = {RFIDtagArray[0], RFIDtagArray[1], RFIDtagArray[2],          // Create an array representing an entire line of data
+    if(currRFID != pastRFID  | (HHMMSS-pastHHMMSS >= delayTime)) {                      // See if the tag read is a recent repeat
+      if(SDOK == 1) {SDwriteString(SDsaveString, dataFile);}                            // If it's a new read, save to the SD card
+      char flashData[13] = {RFIDtagArray[0], RFIDtagArray[1], RFIDtagArray[2],          // Create an array representing an entire line of data
           RFIDtagArray[3], RFIDtagArray[4], RFcircuit, rtc.getMonth(), rtc.getDate(), 
           rtc.getYear(), rtc.getHours(), rtc.getMinutes(), rtc.getSeconds()};
-      writeFlashArray(fAddress, flashData, 12);                                         // write the array of 12 bytes
-      fAddress = advanceFlashAddress(fAddress, 12);                                     // Add 12 to the flash address 
-      pastRFID = RFIDtagNumber;                                                         // Update past RFID to check for repeats       
+      writeFlashArray(fAddr, flashData, 12);  //write array 
+      fAddr = advanceFlashAddr(fAddr, 12);
+      //fAddress = advanceFlashAddress(fAddress, 12);                                     // Add 12 to the flash address 
+      pastRFID = currRFID;                                                         // Update past RFID to check for repeats       
       pastHHMMSS = HHMMSS;                                                              // Update pastHHMMSS to check for repeats
     } else {
       if(Debug) serial.println("Repeat - Data not logged");                             // Message to indicate repeats (no data logged)
@@ -307,7 +352,9 @@ void loop() { // Main code is here, it loops forever:
       serial.println(SDsaveString);
       serial.println();
     }
-    blipLED(5);
+    blinkLED(LED_RFID, 2,5);
+
+    
  }
 
 //////////Pause//////////////////Pause//////////
@@ -319,7 +366,14 @@ void loop() { // Main code is here, it loops forever:
   }else{
     sleepTimer(pauseCountDown, pauseRemainder);
    }
+
+//Alternate between circuits (comment out to stay on one cicuit).
+   //RFcircuit == 1 ? RFcircuit = 2 : RFcircuit = 1; //if-else statement to alternate between RFID circuits
+
 }
+
+  
+
 
 
 /////////////////////////////////////////////////////////////////////////////
@@ -330,19 +384,13 @@ void loop() { // Main code is here, it loops forever:
 void blinkLED(uint8_t ledPin, uint8_t repeats, uint16_t duration) { //Flash an LED or toggle a pin
   pinMode(ledPin, OUTPUT);             // make pin an output
   for (int i = 0; i < repeats; i++) {  // loop to flash LED x number of times
-    delay(duration);                   // pause for a while
     digitalWrite(ledPin, LOW);         // turn the LED on (LOW turns it on)
     delay(duration);                   // pause again
     digitalWrite(ledPin, HIGH);        // turn the LED off (HIGH turns it off)
+    delay(duration);                   // pause for a while
   }                                    // end loop
 }                                      // End function
 
-//Quick LED blink
-void blipLED(uint16_t blip) {
-  digitalWrite(LED_RFID, LOW);    // turn the LED on (LOW turns it on)
-  delay(blip);                    // leave LED on for a quick flash
-  digitalWrite(LED_RFID, HIGH);   // turn the LED off (HIGH turns it off)
-}
 
 //Recieve a byte (charaacter) of data from the user- this times out if nothing is entered
 char getInputByte(uint32_t timeOut) {                 // Get a single character
@@ -410,7 +458,7 @@ void sleepAlarm(){                            // sleep and wake up using the ala
    rtc.enableDisableAlarm(B00000111);         // Enable daily alarm - responds to hour, minute, and second (set last three enable bits)
    rtc.enableAlarmINT(1);                     // Enable the clock interrupt output.
    lpSleep();                                 // sleep funciton - sleep until alarm interrupt
-   blipLED(30);                               // blink to indicate wakeup
+   blinkLED(LED_RFID, 5, 200);                // blink to indicate wakeup
    rtc.writeRegister(0x02, 0);                // clear clock flags to turn off alarm.
 }
 
@@ -419,9 +467,9 @@ void sleepTimer(uint16_t pCount, byte pRemainder){ // Sleep and wake up using a 
    rtc.writeRegister(0x02, 0);       // write a zero to the flags register to clear all flags.
    rtc.setTimer(pCount);             // set timer countdown (32-hertz timer) 
    rtc.enableTimerINT(1);            // enable the clock interrupt output
-   rtc.setCTRL1Register(B10000010);  // set control register to enable a 32 Hertz timer.
+   rtc.setCTRL1Register(B10011011);  // set control register to enable a 32 Hertz timer.
    lpSleep();                        // call sleep funciton (you lose USB communicaiton here)
-   //blipLED(20);                    // blink indicator - processor reawakened
+   //blinkLED(LED_RFID, 1, 30);     // blink indicator - processor reawakened
    delay(pRemainder);                // additional delay for accuracy
    rtc.enableTimerINT(0);            // disable the clock interrupt output
    rtc.writeRegister(0x02, 0);       // write a zero to clear all interrupt flags.
@@ -432,10 +480,10 @@ void sleepTimer(uint16_t pCount, byte pRemainder){ // Sleep and wake up using a 
 
 //Enable the flash chip
 void flashOn(void) {              // Enable the flash chip
-  SPI.begin();                    // Enable SPI communication for Flash Memory
   pinMode(FlashCS, OUTPUT);       // Chip select pin for Flash memory set to output
   digitalWrite(SDselect, HIGH);   // make sure the SD card select is off
   digitalWrite(FlashCS, LOW);     // activate Flash memory
+  SPI.begin();                    // Enable SPI communication for Flash Memory
   SPI.setClockDivider(SPI_CLOCK_DIV16); // slow down the SPI for noise and signal quality reasons.
 }
 
@@ -502,17 +550,28 @@ void readFlashArray(unsigned long addr, char *carr, byte nchar) {  // read a sin
   flashOff();                             // deactivate flash chip
 }
 
-unsigned long advanceFlashAddress(unsigned long fAddr, byte steps) {    // update flash address - should only be used when logging RFID data 
-  unsigned int bAddress = fAddr & 0x03FF;         // and with 00000011 11111111 to isolate byte address
+uint32_t advanceFlashAddr(uint32_t Addr, byte stepsize){
+   uint16_t bAddress = (Addr & 0x03FF) + stepsize;      //and with 00000011 11111111 and add 12 for new byte address
+  if (bAddress > 500) {                           //stop writing if beyond byte address 500 (this is kind of wasteful)
+    Addr = (Addr & 0xFFFFC00) + 0x0400;      //set byte address to zero and add 1 to the page address
+    //serial.println("Page boundary!!!!!!!!!");
+  } else {
+    Addr = Addr + stepsize;                        //just add to the byte address
+  }
+  return Addr;
+}
+
+unsigned long advanceFlashAddress(unsigned long fAddrx, byte steps) {    // update flash address - should only be used when logging RFID data 
+  unsigned int bAddress = fAddrx & 0x03FF;         // and with 00000011 11111111 to isolate byte address
   bAddress = bAddress + steps;                    // number of new bytes added (e.g. RFID (5) + RFcircuit (1) + date/time (6) = 12)
   if (bAddress > 500) {                           // If we are near a page break - beyond byte address 500...
-    fAddr = (fAddr & 0xFFFFC00) + 0x0400;         // ...set byte address to zero and add 1 to the page address
+    fAddrx = (fAddrx & 0xFFFFC00) + 0x0400;         // ...set byte address to zero and add 1 to the page address
   } else {                                        // otherwise... 
-    fAddr = (fAddr & 0xFFFFC00) + bAddress;       // ...just add to the byte address
+    fAddrx = (fAddrx & 0xFFFFC00) + bAddress;       // ...just add to the byte address
   }
-  char fArray[3] = {((fAddr>>16)&0xFF), ((fAddr>>8)&0xFF), (fAddr&0xFF)};  //Format address as array
+  char fArray[3] = {((fAddrx>>16)&0xFF), ((fAddrx>>8)&0xFF), (fAddrx&0xFF)};  //Format address as array
   writeFlashArray(0x400, fArray, 3);              //Write the array
-  return fAddr;                                   //Return new address value
+  return fAddrx;                                   //Return new address value
 }
 
 // Input the device ID and write it to flash memory
@@ -533,7 +592,8 @@ void inputID() {                                         // Function to input an
 //Display backup memory
 void dumpMem(byte doAll) {                        // Display backup memory
   unsigned long curAddr = 0x00000800;             // first address for stored data
-  unsigned long fAddressEnd = getFlashAddr();     // last address for stored data
+  unsigned long fAddressEnd = fAddr;              // last address for stored data
+  //unsigned long fAddressEnd = 0xF000;
   char BA[12];                                    // byte array for holding data
   static char dataLine[40];                       // make an array for writing data lines
   serial.println("Displaying backup memory.");    // Message
@@ -557,6 +617,174 @@ void dumpMem(byte doAll) {                        // Display backup memory
   }
 }
 
+void eraseBackup(char eMode) {  //erase chip and replace stored info
+  //first erase pages 2 through 7 
+  serial.print("Erasing flash with mode ");
+  serial.println(eMode);
+  uint16_t pageAddr = fAddr >> 10;
+  if(eMode == 'a') {
+    serial.println("This will take 80 seconds");
+    flashOn();
+    SPI.transfer(0xC7);  // opcode for chip erase: C7h, 94h, 80h, and 9Ah
+    SPI.transfer(0x94);    
+    SPI.transfer(0x80);    
+    SPI.transfer(0x9A);             
+    digitalWrite(FlashCS, HIGH);    //Deassert cs for process to start 
+    delay(80000);
+    flashOff();                         // Turn off SPI
+    serial.println("DONE!");
+    serial.println("You must now reestablish all parameters");
+    return;
+  } 
+  if(eMode == 's') {
+      serial.println("Seek and destroy!!");
+      pageAddr = 2;
+      while(pageAddr < 8192){   //Max number of pages = 8192
+        uint16_t addr = (pageAddr << 10);          //check first byte of each page
+        byte rByte = readFlashByte(addr);
+        if(rByte != 255){
+          pageAddr++;       //move to next page
+        } else {
+          if(pageAddr == 2) {
+            break;
+          } else {
+            pageAddr--;       //go back to last page with data
+            break;
+          }
+        }
+    }
+  }
+  if(eMode == 'f') {
+    serial.println("Fast erase.");
+    pageAddr = (fAddr >> 10) & 0x1FFF;
+  }
+  serial.print("erasing through page ");
+  serial.println(pageAddr, DEC);
+  
+  for(uint16_t p=2; p<=pageAddr; p++) {
+    serial.print("Erasing page ");
+    serial.println(p);
+    uint32_t ePage = p << 10;
+    flashOn();
+    SPI.transfer(0x81);                    // opcode for page erase: 0x81
+    SPI.transfer((ePage >> 16) & 0xFF);    // first of three address bytes
+    SPI.transfer((ePage >> 8) & 0xFF);     // second address byte
+    SPI.transfer(ePage & 0xFF);            // third address byte
+    digitalWrite(FlashCS, HIGH);           // Deassert cs for process to start 
+    delay(35);                             // delay for page erase
+    flashOff();
+  }
+  fAddr = 0x800;
+}
+
+void writeMem(byte doAll) {
+  //write backup data to SD card
+  String BakupFileName = String(deviceID) + "BKUP.TXT";
+  serial.print("Writing flash to SD card to ");
+  serial.println(BakupFileName);
+  uint32_t fAddrEnd;
+  doAll == 0 ? fAddrEnd = fAddr : fAddrEnd = ((8192 << 10) + 512) ;   // get last flash address
+  uint16_t pAddr = (fAddrEnd & 0xFFFFFC00) >> 10;
+  //uint16_t pAddr = 20;
+  uint16_t bAddr = fAddrEnd & 0x000003FF;
+  uint16_t lastBAddr;
+  byte mBytes[504];
+  uint16_t curPAddr = 2;
+  while(curPAddr <= pAddr) {  //read in full pages one at a time.
+     digitalWrite(LED_RFID, LOW);
+     serial.print(" transfering page ");
+     serial.println(curPAddr, DEC);
+     uint32_t fAddress = curPAddr << 10;    //Make the page address a full address with byte address as zero.
+     flashOn();
+     SPI.transfer(0x03);                           // opcode for low freq read
+     SPI.transfer((fAddress >> 16) & 0xFF);       // write most significant byte of Flash address
+     SPI.transfer((fAddress >> 8) & 0xFF);         // second address byte
+     SPI.transfer(fAddress & 0xFF);                // third address byte
+     for (int n = 0; n < 504; n++) {             // loop to read in an RFID code from the flash and send it out via serial comm
+       mBytes[n] = SPI.transfer(0);         //read in 504 bytes     
+       //serial.print(mBytes[n]);
+     }
+     digitalWrite(LED_RFID, HIGH);
+     flashOff();                        
+     if(curPAddr == pAddr){      //If on the last page, only write the real data (not empty bytes).
+        lastBAddr = bAddr;
+     } else {
+        lastBAddr = 504;
+     }
+     //Now write to SD card
+     String wStr;
+     String BakupFileName = String(deviceID) + "BKUP.TXT";
+     SDstart();
+     File dataFile = SD.open(BakupFileName, FILE_WRITE);        //Initialize the SD card and open the file "datalog.txt" or create it if it is not there.
+     if (dataFile) {
+         for (int i = 0; i < lastBAddr; i=i+12) {             // loop to read in an RFID code from the flash and send it out via serial comm
+            static char charRFID[10];
+            sprintf(charRFID, "%02X%02X%02X%02X%02X", mBytes[i], mBytes[i+1], mBytes[i+2], mBytes[i+3], mBytes[i+4]); 
+            static char dateAndTime[17];
+            sprintf(dateAndTime, "%02d/%02d/%02d %02d:%02d:%02d",mBytes[i+6], mBytes[i+8], mBytes[i+7], mBytes[i+9], mBytes[i+10], mBytes[i+11]);  //note order switched....+8 then +7
+            wStr = String(charRFID) + ", " + mBytes[i+5] +", " + String(dateAndTime);
+            dataFile.println(wStr);
+            //serial.println(wStr);      
+         }
+       dataFile.close();      //close the file  
+     }
+     SDstop();
+     curPAddr++;
+  }
+  blinkLED(LED_RFID, 6, 70);
+}
+
+
+
+
+
+uint32_t FlashGetAddr(uint8_t spacing){
+  uint32_t addr = 0;              // memory address (what we are trying to find)
+  uint16_t pageAddr = 2;          // page address: backup memory starts on page 2
+  uint16_t byteAddr = 0;          // byte address; start where first written byte might be
+  byte rByte = 0;
+  serial.print("Finding address ");
+  //serial.println(pageAddr);
+  while(pageAddr < 8192){   //Max number of pages = 8192
+      addr = (pageAddr << 10);          //check first byte of each page
+      serial.print(".");
+      //serial.println(pageAddr, HEX);
+      rByte = readFlashByte(addr);
+      //serial.print("byte read: ");
+      //serial.println(rByte);
+      if(rByte != 255){
+        pageAddr++;       //move to next page
+      } else {
+        if(pageAddr == 2) {
+          return 0x800;
+        } else {
+          pageAddr--;       //go back to last page with data
+          break;
+        }
+      }
+      //serial.print("page found - ");
+      //serial.println(pageAddr, HEX);
+  }
+  while(byteAddr < 500) {
+      addr = (pageAddr << 10) + byteAddr;
+      rByte = readFlashByte(addr);
+      if(rByte == 255){
+        break;
+      }
+      byteAddr = byteAddr + spacing;
+  }
+  if(byteAddr > 500) {
+      addr = ((pageAddr+1)<<10);  //set address to beginning of next page
+  } 
+  serial.println();
+  serial.print("Address set to ");
+  serial.println(addr, HEX);
+  return addr;
+}
+
+
+
+
 ////////////SD CARD FUNCTIONS////////////////////
 
 //Startup routine for the SD card
@@ -568,6 +796,7 @@ bool SDstart() {                 // Startup routine for the SD card
   delay(20);
   digitalWrite(SDselect, LOW);   // SD card turned on
   if (!SD.begin(SDselect)) {     // Return a 1 if everyting works
+    //serial.println("SD fail");
     return 0;
   } else {
     return 1;

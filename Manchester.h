@@ -132,7 +132,7 @@ byte FastRead(byte whichCircuit, byte checkDelay, unsigned int readTime) {
     digitalWrite(SHD_PINB, LOW);       // Turn on secondary RFID circuit
     IntPin = DEMOD_OUT_2;              // Circuit 2 input source 
   }
-  pinMode(DEMOD_OUT_2, INPUT);        // set up RFID data pin as an input
+  pinMode(IntPin, INPUT);        // set up RFID data pin as an input
   // serial.println("fast read activated...");
   rParity = 0;
   parityFail = 0x07FF;  // start with 11 bits set and clear one for every line-parity check that passes, and clear the last for the column parity check
