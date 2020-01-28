@@ -35,7 +35,7 @@
 
 
 
-//Declaere needed global variables in here
+//Declare needed global variables in here
 byte rParity;                         // temporary storage of parity data.
 unsigned int parityFail;              // Indicates if there was a parity mismatch (i.e. a failed read)
 unsigned int pulseCount;              // For counting pulses from RFID reader

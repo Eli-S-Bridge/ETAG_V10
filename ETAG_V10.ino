@@ -37,6 +37,7 @@
 Nov 8, 2019 - Added Memory address lookup - address pointer no longer used. 
 Nov 10, 2019 - Added dual logging modes. 
 Nov 10, 2019 - Fixed bug in sleepTimer function that stopped the clock.
+Dec 15, 2019 - Changed default mode to no-SD, added LED flash when logging starts
 
 */
 
@@ -96,17 +97,17 @@ byte RFIDtagArray[5];                 // Stores the five individual bytes of a t
 
 // ********************CONSTANTS (SET UP LOGGING PARAMETERS HERE!!)*******************************
 const byte checkTime = 30;                          // How long in milliseconds to check to see if a tag is present (Tag is only partially read during this time -- This is just a quick way of detirmining if a tag is present or not
-const unsigned int pollTime1 = 200;                 // How long in milliseconds to try to read a tag if a tag was initially detected (applies to both RF circuits, but that can be changed)
+const unsigned int pollTime1 = 100;                 // How long in milliseconds to try to read a tag if a tag was initially detected (applies to both RF circuits, but that can be changed)
 const unsigned int delayTime = 8;                   // Minimim time in seconds between recording the same tag twice in a row (only applies to data logging--other operations are unaffected)
-const unsigned long pauseTime = 1000;                // CRITICAL - This determines how long in milliseconds to wait between reading attempts. Make this wait time as long as you can and still maintain functionality (more pauseTime = more power saved)
+const unsigned long pauseTime = 200;                // CRITICAL - This determines how long in milliseconds to wait between reading attempts. Make this wait time as long as you can and still maintain functionality (more pauseTime = more power saved)
 uint16_t pauseCountDown = pauseTime / 31.25;        // Calculate pauseTime for 32 hertz timer
 byte pauseRemainder = ((100*pauseTime)%3125)/100;   // Calculate a delay if the pause period must be accurate
 //byte pauseRemainder = 0 ;                         // ...or set it to zero if accuracy does not matter
 
 const byte slpH = 22;                            // When to go to sleep at night - hour
 const byte slpM = 00;                            // When to go to sleep at night - minute
-const byte wakH = 07;                            // When to wake up in the morning - hour
-const byte wakM = 30;                            // When to wake up in the morning - minute
+const byte wakH = 05;                            // When to wake up in the morning - hour
+const byte wakM = 00;                            // When to wake up in the morning - minute
 const unsigned int slpTime = slpH * 100 + slpM;  // Combined hours and minutes for sleep time
 const unsigned int wakTime = wakH * 100 + wakM;  // Combined hours and minutes for wake time
 
@@ -118,7 +119,7 @@ const unsigned int wakTime = wakH * 100 + wakM;  // Combined hours and minutes f
    serial data, but tag reading and data storage will still work.
 */
 unsigned int cycleCount = 0;          // counts read cycles
-unsigned int stopCycleCount = 400;     // How many read cycles to maintain serial comminications
+unsigned int stopCycleCount = 500;     // How many read cycles to maintain serial comminications
 bool Debug = 1;                       // Use to stop serial messages once sleep mode is used.
 byte SDOK = 1;
 char logMode;
@@ -174,9 +175,12 @@ void setup() {  // setup code goes here, it is run once before anything else
  
   logMode = readFlashByte(0x0000040D);
   if(logMode != 'S' & logMode != 'F') { //If log mode is not established then do so
-    serial.println("Setting log mode to SD card");
-    writeFlashByte(0x0000040D, 0x53);    //hex 53 is "S"
-    logMode = 'S';
+    //serial.println("Setting log mode to SD card"); 
+    //writeFlashByte(0x0000040D, 0x53);    //hex 53 is "S"
+    //logMode = 'S';
+    serial.println("Setting log mode to Flash mode");
+    writeFlashByte(0x0000040D, 0x46);    //hex 46 is "F"
+    logMode = 'F';
   }
   if(logMode == 'S'){
     serial.println("Logging mode S");
@@ -300,6 +304,7 @@ void setup() {  // setup code goes here, it is run once before anything else
   String logStr = "Logging started at " + showTime();
   if(SDOK == 1) {SDwriteString(logStr, logFile);}
   RFcircuit = 1;
+  blinkLED(LED_RFID, 3,100);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -327,6 +332,8 @@ void loop() { // Main code is here, it loops forever:
 //////Read Tags//////////////Read Tags//////////
 //Try to read tags - if a tag is read and it is not a recent repeat, write the data to the SD card and the backup memory.
 
+  
+
   if (FastRead(RFcircuit, checkTime, pollTime1) == 1) {
     processTag(RFIDtagArray, RFIDstring, RFIDtagUser, &RFIDtagNumber);                  // Parse tag data into string and hexidecimal formats
     rtc.updateTime();                                                                   // Update time from clock
@@ -341,8 +348,8 @@ void loop() { // Main code is here, it loops forever:
           rtc.getYear(), rtc.getHours(), rtc.getMinutes(), rtc.getSeconds()};
       writeFlashArray(fAddr, flashData, 12);  //write array 
       fAddr = advanceFlashAddr(fAddr, 12);
-      //fAddress = advanceFlashAddress(fAddress, 12);                                     // Add 12 to the flash address 
-      pastRFID = currRFID;                                                         // Update past RFID to check for repeats       
+      //fAddress = advanceFlashAddress(fAddress, 12);                                   // Add 12 to the flash address 
+      pastRFID = currRFID;                                                              // Update past RFID to check for repeats       
       pastHHMMSS = HHMMSS;                                                              // Update pastHHMMSS to check for repeats
     } else {
       if(Debug) serial.println("Repeat - Data not logged");                             // Message to indicate repeats (no data logged)
@@ -353,8 +360,6 @@ void loop() { // Main code is here, it loops forever:
       serial.println();
     }
     blinkLED(LED_RFID, 2,5);
-
-    
  }
 
 //////////Pause//////////////////Pause//////////
@@ -365,7 +370,7 @@ void loop() { // Main code is here, it loops forever:
     cycleCount++ ;                   // Advance the counter                         
   }else{
     sleepTimer(pauseCountDown, pauseRemainder);
-   }
+  }
 
 //Alternate between circuits (comment out to stay on one cicuit).
    //RFcircuit == 1 ? RFcircuit = 2 : RFcircuit = 1; //if-else statement to alternate between RFID circuits
@@ -561,19 +566,6 @@ uint32_t advanceFlashAddr(uint32_t Addr, byte stepsize){
   return Addr;
 }
 
-unsigned long advanceFlashAddress(unsigned long fAddrx, byte steps) {    // update flash address - should only be used when logging RFID data 
-  unsigned int bAddress = fAddrx & 0x03FF;         // and with 00000011 11111111 to isolate byte address
-  bAddress = bAddress + steps;                    // number of new bytes added (e.g. RFID (5) + RFcircuit (1) + date/time (6) = 12)
-  if (bAddress > 500) {                           // If we are near a page break - beyond byte address 500...
-    fAddrx = (fAddrx & 0xFFFFC00) + 0x0400;         // ...set byte address to zero and add 1 to the page address
-  } else {                                        // otherwise... 
-    fAddrx = (fAddrx & 0xFFFFC00) + bAddress;       // ...just add to the byte address
-  }
-  char fArray[3] = {((fAddrx>>16)&0xFF), ((fAddrx>>8)&0xFF), (fAddrx&0xFF)};  //Format address as array
-  writeFlashArray(0x400, fArray, 3);              //Write the array
-  return fAddrx;                                   //Return new address value
-}
-
 // Input the device ID and write it to flash memory
 void inputID() {                                         // Function to input and set feeder ID
   serial.println("Enter four alphanumeric characters");  // Ask for user input
@@ -721,7 +713,7 @@ void writeMem(byte doAll) {
             static char charRFID[10];
             sprintf(charRFID, "%02X%02X%02X%02X%02X", mBytes[i], mBytes[i+1], mBytes[i+2], mBytes[i+3], mBytes[i+4]); 
             static char dateAndTime[17];
-            sprintf(dateAndTime, "%02d/%02d/%02d %02d:%02d:%02d",mBytes[i+6], mBytes[i+8], mBytes[i+7], mBytes[i+9], mBytes[i+10], mBytes[i+11]);  //note order switched....+8 then +7
+            sprintf(dateAndTime, "%02d/%02d/%02d %02d:%02d:%02d",mBytes[i+6], mBytes[i+7], mBytes[i+8], mBytes[i+9], mBytes[i+10], mBytes[i+11]);  //note order switched....+8 then +7
             wStr = String(charRFID) + ", " + mBytes[i+5] +", " + String(dateAndTime);
             dataFile.println(wStr);
             //serial.println(wStr);      
