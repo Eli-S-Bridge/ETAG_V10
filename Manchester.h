@@ -37,22 +37,44 @@
 
 //Declare needed global variables in here
 byte rParity;                         // temporary storage of parity data.
+uint16_t crc;
+uint8_t crcOK;                         
 unsigned int parityFail;              // Indicates if there was a parity mismatch (i.e. a failed read)
-unsigned int pulseCount;              // For counting pulses from RFID reader
+uint16_t pulseCount;                  // For counting pulses from RFID reader
+uint8_t pulse2 = 0;                   // a 1 indicates we are looking at the second pulse of a zero bit in Biphase encoding
 byte OneCounter;                      // For counting the number of consecutive 1s in RFID input -- 9 ones signals the beginning of an ID code
+uint16_t tenZ;                        // For counting the number of consecutive 0s in RFID input -- 10 zeros signals the beginning of an ISO ID code
 byte longPulseDetected = 0;           // A long pulse must first be read from the RFID output to begin reading a tag ID - This variable indicates whether a long pulse has happened
 byte pastPulseLong = 0;               // Indicates whether the past pulse was long (1) or short (0).
+
+union                                          // Make a union structure for tracking input bits
+{struct
+  {uint8_t bitCounter; uint8_t byteCounter;};  // 2 bytes that make up RFID counter
+  uint16_t counter;                            // Name for 16bbit variable
+} RFID;                                        // Name of the union variable (use RFID.counter or RFID.byteCounter or RFID.bitCounter)
+
+
+
+uint16_t RFIDCounter;                 // MSB is byte counter, LSB is bit counter
+
+
 byte RFIDbitCounter;                  // Counts the number of bits that have gone into an RFID tag read
 byte RFIDbyteCounter;                 // Counts the number of bytes that have gone into an RFID tag read
-byte RFIDbytes[11];                   // Array of bytes for storing all RFID tag data (ID code and parity bits)
+byte RFIDbytes[16];                   // Array of bytes for storing all RFID tag data (ID code and parity bits)
+uint8_t messageBytes;                 // Number of bytes in RFID message (5 for EM4100; 8 for normal ISO; 
 int IntPin;                           // Pin for RFID input (interrupt pin)
+uint16_t temp[600];
+uint16_t tc = 0;
 
 /******************Functions Declarations***********************/
 void processTag(byte *RFIDtagArray, char *RFIDstring, byte RFIDtagUser, unsigned long *RFIDtagNumber);
 //checks if there is a parity fail when a pulse has been detected, if the parity is fine, then the tag will start reading in data.
-byte FastRead(byte whichCircuit, byte checkDelay, unsigned int readTime);
+byte FastRead(byte whichCircuit, unsigned int checkDelay, unsigned int readTime);
+byte ISOFastRead(byte whichCircuit, unsigned int checkDelay, unsigned int readTime);
 void INT_demodOut();
+void ISOINT_demodOut();
 void shutDownRFID();
+uint16_t crc16k(uint16_t crc, uint8_t *mem, uint8_t len);
 
 /*********************Functions Definitions*************************/
 /*
@@ -93,23 +115,31 @@ void processTag(byte *RFIDtagArray, char *RFIDstring, byte RFIDtagUser, unsigned
   if(RFIDtagArray[4] < 0x10) {StringFive = String("0" + StringFive);}
   *RFIDtagNumber = *RFIDtagNumber + RFIDtagArray[4];
   String(StringOne + StringTwo + StringThree + StringFour + StringFive).toCharArray(RFIDstring, 11); //updates the RFIDstring with the five new strings
-
-//  serial.println();
-//  serial.println(StringOne);
-//  serial.println(StringTwo);
-//  serial.println(StringThree);
-//  serial.println(StringFour);
-//  serial.println(StringFive);
-//  serial.println(RFIDstring);
-
-  do
-   {
-      *RFIDstring = toupper( *RFIDstring );  //capitalize each character in the char array
-
-      RFIDstring++;
-   }   while ( *RFIDstring != '\0' );
-
+  do {
+     *RFIDstring = toupper( *RFIDstring );  //capitalize each character in the char array
+     RFIDstring++;
+   } while ( *RFIDstring != '\0' );
 }
+
+void processISOTag(byte *RFIDtagArray, char *RFIDstring, uint16_t *countryCode, uint8_t *tagTemp, uint32_t *RFIDtagNumber)
+{
+  for(uint8_t i = 0; i <= 5; i++) {RFIDtagArray[i] = RFIDbytes[i];}
+  *tagTemp = RFIDbytes[10];
+  *RFIDtagNumber = (RFIDtagArray[3]<<24) + (RFIDtagArray[2]<<16) + (RFIDtagArray[1]<<8) + RFIDtagArray[0];
+  *countryCode = (RFIDtagArray[5]<<2) + (RFIDtagArray[4]>>6);
+  sprintf(RFIDstring, "%03X.%02X%02X%02X%02X%02X", 
+             *countryCode, (RFIDbytes[4] & 0b00111111), RFIDbytes[3], RFIDbytes[2], RFIDbytes[1], RFIDbytes[0]);
+    do {
+     *RFIDstring = toupper( *RFIDstring );  //capitalize each character in the char array
+     RFIDstring++;
+   } while ( *RFIDstring != '\0' );
+}
+
+
+
+
+
+
 
 /*Sees if a tag is present and returns a 0 or 1 depending on whether or not it can be read
  * @parameters -
@@ -121,7 +151,7 @@ void processTag(byte *RFIDtagArray, char *RFIDstring, byte RFIDtagUser, unsigned
   *
   *     @returns - 0 or 1 whether tag can be read in or not
   */
-byte FastRead(byte whichCircuit, byte checkDelay, unsigned int readTime) {
+byte FastRead(byte whichCircuit, unsigned int checkDelay, unsigned int readTime) {
   if (whichCircuit == 1) {
     digitalWrite(SHD_PINA, LOW);       // Turn on primary RFID circuit
     digitalWrite(SHD_PINB, HIGH);      // Turn off secondary RFID circuit
@@ -261,5 +291,215 @@ void shutDownRFID() {    // Just shut down both RFID circuit
   digitalWrite(SHD_PINA, HIGH);             // Turn off primary RFID circuit
   digitalWrite(SHD_PINB, HIGH);             // Turn off secondary RFID circuit
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+byte ISOFastRead(byte whichCircuit, unsigned int checkDelay, unsigned int readTime) {
+  if (whichCircuit == 1) {
+    digitalWrite(SHD_PINA, LOW);       // Turn on primary RFID circuit
+    digitalWrite(SHD_PINB, HIGH);      // Turn off secondary RFID circuit
+    IntPin = DEMOD_OUT_1;              // Circuit 1 input source 
+    
+  } else {
+    digitalWrite(SHD_PINA, HIGH);      // Turn off primary RFID circuit
+    digitalWrite(SHD_PINB, LOW);       // Turn on secondary RFID circuit
+    IntPin = DEMOD_OUT_2;              // Circuit 2 input source 
+  }
+  pinMode(IntPin, INPUT);        // set up RFID data pin as an input
+  //serial.println("fast read activated...");
+  rParity = 0;
+  parityFail = 0x07FF;  // start with 11 bits set and clear one for every line-parity check that passes, and clear the last for the column parity check
+  crc = 0;
+  crcOK = 0;
+  pulseCount = 0;
+  tenZ = 0xFFFF;
+  longPulseDetected = 0;
+  pastPulseLong = 0;
+  RFID.byteCounter = 0;
+  RFID.bitCounter = 10;                  // counts bits in each RFID byte
+  memset(RFIDbytes, 0, sizeof(RFIDbytes));  // Clear RFID memory space
+  unsigned long currentMillis = millis();   // To determine how long to poll for tags, first get the current value of the built in millisecond clock on the processor
+  unsigned long stopMillis = currentMillis + readTime;
+  attachInterrupt(digitalPinToInterrupt(IntPin), ISOINT_demodOut, CHANGE);
+
+  // delay(checkTime);
+  delay(checkDelay);
+  //serial.print("pulses detected... ");
+  //serial.println(pulseCount, DEC);
+  if (pulseCount > (checkDelay - 25)) {     // May want a separate variable for threshold pulse count.
+      while (millis() < stopMillis & crcOK != 3) {
+        delay(1);
+      }
+      //serial.print("Exiting read loop... ");
+  } else {
+    detachInterrupt(digitalPinToInterrupt(IntPin));
+    shutDownRFID();        // Turn off both RFID circuits
+    //serial.println("nothing detected... ");
+    return (0);
+  }
+
+  detachInterrupt(digitalPinToInterrupt(IntPin));
+  //serial.println("read completed... ");
+  //serial.println(crcOK);
+  shutDownRFID();        // Turn off both RFID circuits
+  if(crcOK < 3) {  //Start over if crc did not check out.
+    return (0); 
+  } else {
+    return (1);
+  }
+}
+
+/*
+ * the ISR function called for attachInterrupt.
+ * start adding data to rfidbytes, this reads in tag data
+ */
+void ISOINT_demodOut()
+{
+  if(crcOK != 3) { //Do nothing if tag read is complete
+    //Get time elapsed since last interrupt
+    volatile uint32_t timeNow = micros();              // Store the current microsecond timer value in timeNow
+    volatile static uint32_t lastTime = 0;             // Clear this variable
+    uint16_t fDiff = timeNow - lastTime;               // Calculate time elapsed since the last execution of this function
+    lastTime = timeNow;                                // Establish a new value for lastTime
+  
+    //Use pulse interval to interpret input
+    uint8_t switchVar = 0;                             //default switchVar value 
+    if(fDiff > 85 & fDiff < 170) {switchVar = 1;}      //Short pulse switchVar value
+    if(fDiff > 200 & fDiff < 275) {switchVar = 2;}     //Long pulse switchVar value
+    if((RFID.byteCounter==9) && (RFID.bitCounter==8)){ //Time to check CRC.
+      crc = crc16k(0x0000, RFIDbytes, 8);
+      if(crc == (RFIDbytes[9]<<8) + RFIDbytes[8]){
+        crcOK=1;
+//        if (RFIDbytes[6] & 0b00000001 == 0) {  // This signals an end to the read when there is no auxilliary data
+//          crcOK = 3;
+//          switchVar = 3;
+//        }   
+      } else { 
+        switchVar = 0;   // If CRC fails start over
+      }
+    }
+    if((RFID.byteCounter==12) && (RFID.bitCounter==8)) {switchVar = 3;}
+    
+    //EXECUTION PATHS for different pulse lengths
+    switch (switchVar) {  
+       case 1: {  
+              //serial.print("short pulse "); 
+              //serial.print(pulseCount);
+              if(pulse2 == 0) {  //Ignore second pulse in zero bits
+                if(RFID.bitCounter != 8) {   //bit Counter should never be 8 on a short pulse.
+                  //serial.print(" first short pulse ");
+                  pulse2 = 1;
+                  pulseCount++;
+                  uint16_t tempZ = tenZ & 0b0000001111111111;
+                  if(tempZ != 0) {
+                    tenZ = tenZ << 1; //Shift over, leave lsb as zero 
+                    //serial.print("Add 0 ");
+                    //serial.println(tenZ, BIN);
+                  } else {
+                    //serial.print("GOT 10 Z ");
+                    //serial.println(RFID.bitCounter, BIN);
+                    bitClear(RFIDbytes[RFID.byteCounter], RFID.bitCounter); //Not needed if RFID bytes are already zero
+                    RFID.bitCounter++;
+                  }
+                } else {
+                  RFID.byteCounter = 0;   //reset counter
+                  RFID.bitCounter = 10;   //reinitialize counter
+                  tenZ = 0xFFFF;          //restart search for 10 zeros
+                }
+              } else {
+                  pulse2 = 0;
+                  //serial.print(" 2nd short pulse (ignored) ");
+              }
+              //serial.println(); 
+              break;
+            }
+    
+       case 2: {   
+              //serial.print("LONG PULSE ");
+              //serial.println(RFID.counter);
+              pulse2 = 0;
+              pulseCount++;
+              uint16_t tempZ = tenZ & 0b0000001111111111;
+              if(tempZ != 0) {
+                 tenZ = tenZ << 1; //Shift over
+                 tenZ = tenZ + 1;  //Make lsb one    
+              } else {
+                //serial.println(" Already GOT 10 ZEROS ");
+                //serial.println(RFID.bitCounter);
+                if(RFID.bitCounter < 8) {
+                  bitSet(RFIDbytes[RFID.byteCounter], RFID.bitCounter);
+                  RFID.bitCounter++;
+                  } else {
+                    if(RFID.bitCounter == 8){
+                      //serial.print(RFIDbytes[RFID.byteCounter], HEX);
+                      //serial.print(" ");
+                      RFID.bitCounter = 0;
+                      RFID.byteCounter++;
+                    }
+                    if(RFID.bitCounter >= 9){   //Bit counter initially set to 10.
+                      RFID.bitCounter = 0;
+                      RFID.byteCounter = 0;
+                      //RFID.byteCounter++;
+                    }
+                  }
+  
+              }
+           break;     
+       }
+       case 0: {   //Pulse not of right length - start over.
+          crcOK = 0;
+          RFID.byteCounter = 0;   //reset counter
+          RFID.bitCounter = 10;   //reinitialize counter
+          tenZ = 0xFFFF;          //restart search for 10 zeros
+          pulse2=0;               //second short burst disabled
+          break;
+        }  
+        
+     case 3: {   //read completed
+        if(crcOK>0) {crcOK=3;}
+//        serial.println();
+//        for(byte i=0; i<14; i++) {
+//            serial.print(RFIDbytes[i], HEX);
+//            serial.print(" ");
+//        }
+//        serial.print("CRC: ");
+//        serial.println(crc, HEX);
+//        serial.print("CRC OK: ");
+//        serial.println(crcOK);
+        break;
+     }
+    }
+  }
+}
+
+
+uint16_t crc16k(uint16_t crc1, uint8_t *mem, uint8_t len) { //Calculates CRC (use 0x0000 for crc variable)
+
+    uint8_t *data = mem;
+    
+    if (data == NULL){
+        return 0;
+    }
+    while (len--) {
+        crc1 ^= *data++;
+        for (uint8_t k = 0; k < 8; k++)
+            crc1 = crc1 & 1 ? (crc1 >> 1) ^ 0x8408 : crc1 >> 1;
+    }
+    //serial.print(crc1, HEX);
+    return crc1;
+}
+
+
 
  #endif
