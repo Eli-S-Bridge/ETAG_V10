@@ -473,7 +473,7 @@ void loop() { // Main code is here, it loops forever:
     if(ISO==0) {
       processTag(RFIDtagArray, RFIDstring, RFIDtagUser, &RFIDtagNumber);            // Parse tag data into string and hexidecimal formats
       sprintf(cArray1, "%02X%02X%02X%02X%02X, %d, %02d/%02d/%04d %02d:%02d:%02d",
-        RFIDtagArray[0], RFIDtagArray[1], RFIDtagArray[2], RFIDtagArray[3], RFIDtagArray[4], RFIDtagArray[5],
+        RFIDtagArray[0], RFIDtagArray[1], RFIDtagArray[2], RFIDtagArray[3], RFIDtagArray[4],
         RFcircuit, rtc.getMonth(), rtc.getDate(), rtc.getYear()+2000,
         rtc.getHours(), rtc.getMinutes(), rtc.getSeconds());
       cArray1[34] = '\0';
