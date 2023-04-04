@@ -256,10 +256,10 @@ void setup() {  // setup code goes here, it is run once before anything else
   }
   //serial.print("Device ID: "); serial.println(String(deviceID));             //Display device ID
 
-  memLoc = getMemLoc(datStart, 4324848);            //Last page address is 8191, 8191 * 528 = 4324848
+  memLoc = getMemLoc(datStart, 4324848);            //Last page address is 8191, beginning of last page is 528 * 8191 = 4324848
   serial.print("Current RFID memory location: ");
   serial.println(memLoc, DEC);
-  logLoc = getMemLoc(logStart, datStart-528);       //Range for log lines 
+  logLoc = getMemLoc(logStart, datStart-528);       //Page Range for log lines 
   serial.print("Current log memory location: ");
   serial.println(logLoc, DEC);
   
@@ -330,8 +330,8 @@ void setup() {  // setup code goes here, it is run once before anything else
     // Ask the user for instruction and display the options
     serial.println("What to do? (input capital letters)");
     serial.println("    C = set clock");
-    serial.println("    B = Display backup memory");
-    serial.println("    D = Display logging history");
+    serial.println("    B = Display backup memory and log history");
+//    serial.println("    D = Display logging history");
     serial.println("    E = Erase (reset) backup memory");
     serial.println("    I = Set device ID");
     serial.println("    M = Change logging mode");
@@ -371,10 +371,10 @@ void setup() {  // setup code goes here, it is run once before anything else
           extractMemLog(1);
           break;       //  break out of this option, menu variable still equals 1 so the menu will display again
         }
-      case 'D': {
-          writeMemLog();
-          break;       //  break out of this option, menu variable still equals 1 so the menu will display again
-        }
+//      case 'D': {
+//          writeMemLog();
+//          break;       //  break out of this option, menu variable still equals 1 so the menu will display again
+//        }
       case 'M': {
           readFlash(0x0D, cArray1, 1);  //get the logmode
           logMode = cArray1[0];
@@ -423,7 +423,6 @@ void setup() {  // setup code goes here, it is run once before anything else
   
   RFcircuit = 1;
   blinkLED(LED_RFID, 3,100);
-
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -473,7 +472,7 @@ void loop() { // Main code is here, it loops forever:
     if(ISO==0) {
       processTag(RFIDtagArray, RFIDstring, RFIDtagUser, &RFIDtagNumber);            // Parse tag data into string and hexidecimal formats
       sprintf(cArray1, "%02X%02X%02X%02X%02X, %d, %02d/%02d/%04d %02d:%02d:%02d",
-        RFIDtagArray[0], RFIDtagArray[1], RFIDtagArray[2], RFIDtagArray[3], RFIDtagArray[4],
+        RFIDtagArray[0], RFIDtagArray[1], RFIDtagArray[2], RFIDtagArray[3], RFIDtagArray[4],  
         RFcircuit, rtc.getMonth(), rtc.getDate(), rtc.getYear()+2000,
         rtc.getHours(), rtc.getMinutes(), rtc.getSeconds());
       cArray1[34] = '\0';
@@ -969,6 +968,7 @@ void extractMemRFID(uint8_t prntWrt) {  //Takes data from Flash and prints to sc
             } else {
                //serial.println("process EM4100 tag line");
                unixTime.b1 = BA[b+6]; unixTime.b2 = BA[b+7]; unixTime.b3 = BA[b+8]; unixTime.b4 = BA[b+9];
+               convertUnix(unixTime.unixLong);
                static char text[41];
                sprintf(text, "%02X%02X%02X%02X%02X, %d, %02d/%02d/%04d %02d:%02d:%02d",
                   BA[b+1], BA[b+2], BA[b+3], BA[b+4], BA[b+5], BA[b], timeIn[0], timeIn[1], timeIn[2], timeIn[3], timeIn[4], timeIn[5]);
@@ -1195,106 +1195,26 @@ void writeMemRFID() {
   }
 }
 
-
-void writeMemLog() { 
-  fName[5] = 'L';                              // change fName to Log file
-  serial.print("Writing all log data to ");   // Message to user 
-  serial.println(fName); 
-  if(memLoc > datStart) {     //proceed only if there are data - write nothing if there are no data
-    byte BA[533];             //define byte array to store a full page (528 bytes) plus 12 extra bytes
-    int b = 0;
-    uint32_t dMem = logStart;  
-    while(dMem < logLoc) {                 // read in full pages one at a time until last page is reached.
-       digitalWrite(LED_RFID, LOW);                 // Flash LED to indicate progress             
-       serial.print("Transfering log data from page ");   // progress message  
-       uint32_t pAddr = dMem/528;
-       serial.println(pAddr, DEC);
-       pAddr = pAddr << 10;   
-       flashOn();
-       SPI.transfer(0x03);                         // opcode for low freq read
-       SPI.transfer((pAddr >> 16) & 0xFF);      // write most significant byte of Flash address
-       SPI.transfer((pAddr >> 8) & 0xFF);       // second address byte
-       SPI.transfer(0);                            // third address byte
-       
-       //SPI.transfer(BA, 528);                  // might work for reading in full page?? needs test.
-       
-       for (int n = 0; n < 532; n++) {           //read in 540 bytes - page crossover should be OK. 
-         BA[n] = SPI.transfer(0);                
-         //serial.print(BA[n]);
-       }    
-       digitalWrite(LED_RFID, HIGH);
-       flashOff();
-
-       SDstart();
-       File dataFile = SD.open(fName, FILE_WRITE);
-       while(b < 528) {
-          if(BA[b] != 0xFF) {
-            getLogMessage(BA[b]); //Log message loaded into logMess
-            //serial.println("process log line");
-            unixTime.b1 = BA[b+1]; unixTime.b2 = BA[b+2]; unixTime.b3 = BA[b+3]; unixTime.b4 = BA[b+4];
-            convertUnix(unixTime.unixLong);  // covert unix time. Time values get stored in array timeIn, bytes 0 through 5.
-            static char text[20]; 
-            sprintf(text, " %02d/%02d/%04d %02d:%02d:%02d", timeIn[0], timeIn[1], timeIn[2], timeIn[3], timeIn[4], timeIn[5]);
-            serial.print(logMess);
-            serial.println(text);
-            dataFile.print(logMess);
-            dataFile.println(text);
-            b = b + 5;
-          } else {
-            b=1000;
-          }  
-        }
-        dataFile.close();      //close the file 
-        SDstop();
-        b = b - 528;    //Pick up somewhere in the next page 
-        dMem = dMem + 528;  //Go to next page.
-        serial.println();
-        serial.print("next page ");
-        serial.println(dMem, DEC);
-        serial.println();
-      }
-    } else {
-    serial.println("No data to write");
-  }
-}
-
-uint32_t getMemLoc(uint32_t startMem, uint32_t endMem){
+uint32_t getMemLoc(uint32_t startMem, uint32_t endMem){ //startMem = beginning of first page; endMem = beginning of last page.
     serial.println("Getting memLoc");
     char ccc[5] = {0,0,0,0,0}; 
-    uint32_t mLoc = startMem; //Start with memory location that is the last byte in page 8 
+    uint32_t mLoc = startMem; //Start with specified memory location
     startMem = startMem + 523;  //look at last 5 bytes on page
     while(startMem <= endMem){                               //This loop provides the last page address
-//       serial.print("checking mem loc ");
-//       serial.print(startMem);
-//       serial.print(". Value is ");
        readFlash(startMem, ccc, 5);
-//       serial.print(ccc[0], HEX);
        if((ccc[0]==0xFF) && (ccc[1]==0xFF) && (ccc[2]==0xFF) && (ccc[3]==0xFF) && (ccc[4]==0xFF)) {
           break;
           } else {
           startMem = startMem + 528;
        }  
     }
-    
-//    serial.println();
-//    serial.print("mLoc max val = ");
-//    serial.println(startMem, DEC);
-    
     uint32_t endLoc = startMem + 80; //Define uppler limit for search
     startMem = startMem-523; //Go back to beginning of page
     uint8_t done = 0;
       while((startMem < endLoc) && done == 0){
-//      serial.print("mLoc is ");
-//      serial.print(startMem, DEC);
-//      serial.print(" and endLoc is ");
-//      serial.println(endLoc, DEC);
        readFlash(startMem, cArray1, 64);
        uint8_t i = 0;
        while(i < 64){
-//        serial.print("mem loc ");
-//        serial.print(startMem+i);
-//        serial.print(" value ");
-//        serial.println(cArray1[i], HEX);
         if(cArray1[i] == 0xFF) {
           if((cArray1[i+1] == 0xFF) && (cArray1[i+2] == 0xFF) && (cArray1[i+3] == 0xFF) && (cArray1[i+4] == 0xFF)){
             //serial.println("end found");
@@ -1307,9 +1227,6 @@ uint32_t getMemLoc(uint32_t startMem, uint32_t endMem){
        }
        if(done==0) {startMem=startMem+64;}
     }
-//    serial.print("final mem loc ");
-//    serial.println(startMem);
-//    serial.println();
     return startMem;
 }
 
