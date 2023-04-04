@@ -308,107 +308,7 @@ void setup() {  // setup code goes here, it is run once before anything else
     if(rtc.is12Hour()==true) {rtc.set24Hour();}   //Make sure we are in 24 hour mode??
   }
   
-
-  
-
-  //////////////MENU////////////MENU////////////MENU////////////MENU////////
-  //Display all of the following each time the main menu is called up.
-  
-  byte menu = 1;
-  while (menu == 1) {
-    serial.println();
-    rtc.updateTime();
-    serial.println(showTime());          
-    serial.println("Device ID: " + String(deviceID)); //Display device ID
-    if(logMode == 'S') {serial.println("Logging mode: S (Data saved to SD card and Flash Mem)");}
-    if(logMode == 'F') {
-      serial.println("Logging mode: F (Data saved to flash mem only; no SD card logging)");
-      //SDOK = 0;     //Turns off SD logging
-    }
-    serial.println();
-
-    // Ask the user for instruction and display the options
-    serial.println("What to do? (input capital letters)");
-    serial.println("    C = set clock");
-    serial.println("    B = Display backup memory and log history");
-//    serial.println("    D = Display logging history");
-    serial.println("    E = Erase (reset) backup memory");
-    serial.println("    I = Set device ID");
-    serial.println("    M = Change logging mode");
-    serial.println("    W = Write flash data to SD card");
-
-    //Get input from user or wait for timeout
-    char incomingByte = getInputByte(15000); 
-    String printThis = String("Value recieved: ") + incomingByte;
-    serial.println(printThis);
-    //serial.println(incomingByte, DEC);
-    if(incomingByte < 47) {    //Ignore punctuation and line returns and such.
-      incomingByte = 'X';
-    } 
-    switch (incomingByte) {                                               // execute whatever option the user selected
-      default:
-        menu = 0;         //Any non-listed entries - set menu to 0 and break from switch function. Move on to logging data
-        break;
-      case 'C': {                                                         // option to set clock
-          inputTime();                                                    // calls function to get time values from user
-          break;                                                        //  break out of this option, menu variable still equals 1 so the menu will display again
-        }
-      case 'I': {
-          inputID(4);   //  calls function to get a new feeder ID
-          break;       //  break out of this option, menu variable still equals 1 so the menu will display again
-        }
-      case 'E': {
-            serial.println("To proceed enter 'ERASE' in capital letters");  // Ask for user input
-            byte IDin = getInputString(10000);                  // Get input from user (specify timeout)
-            if((cArray1[0]=='E') && (cArray1[1]=='R') && (cArray1[2]=='A') && (cArray1[3]=='S') && (cArray1[4]=='E')) {                             // if the string is the right length...
-              eraseBackup('m');
-            }
- 
-            break;   //  break out of this option, menu variable still equals 1 so the menu will display again
-        }
-      case 'B': {
-          extractMemRFID(1);
-          extractMemLog(1);
-          break;       //  break out of this option, menu variable still equals 1 so the menu will display again
-        }
-//      case 'D': {
-//          writeMemLog();
-//          break;       //  break out of this option, menu variable still equals 1 so the menu will display again
-//        }
-      case 'M': {
-          readFlash(0x0D, cArray1, 1);  //get the logmode
-          logMode = cArray1[0];
-          if(logMode != 'S') {
-            cArray1[0] = 'S';
-            writeFlash(0x0D, cArray1, 1);
-            serial.println("Logging mode S");
-            serial.println("Data saved immediately SD card and Flash Mem");
-            if(SDOK == 0) {SDOK = 1;}
-          } else {
-            cArray1[0] = 'F';
-            writeFlash(0x0D, cArray1, 1);
-            serial.println("Logging mode F");
-            serial.println("Data saved to Flash Mem only (no SD card needed)");
-            SDOK = 0;
-          }
-          readFlash(0x0D, cArray1, 1);  //get the logmode
-          logMode = cArray1[0];
-          serial.println("log mode variable: ");
-          serial.println(logMode);
-          break;       //  break out of this option, menu variable still equals 1 so the menu will display again
-        }  
-        case 'W': {
-          if (SDOK == 1) {
-            extractMemRFID(2); //write RFID data to SD card
-            extractMemLog(2);  //write Log data to SD (always do this second so the file names match up).
-          } else {
-            serial.println("SD card missing");
-          }
-          break;       //  break out of this option, menu variable still equals 1 so the menu will display again
-        }  
-      } //end of switch
-  } //end of while(menu = 1){
-  
+  doMenu(); 
   
   rtc.updateTime();
   
@@ -526,6 +426,12 @@ void loop() { // Main code is here, it loops forever:
 //After each read attempt execute a pause using either a simple delay or low power sleep mode.
 
   if(cycleCount < stopCycleCount){   // Pause between read attempts with delay or a sleep timer 
+    if(serial.available()) {
+      byte C1 = serial.read();                          // read input from the user
+      if(C1 == 'm') {                                     // Do nothing with character that are not numbers or letter (ignore line returns and such)
+      doMenu();
+    }
+    }
     delay(pauseTime);                // Use a simple delay and keep USB communication working
     cycleCount++ ;                   // Advance the counter                         
   }else{
@@ -555,6 +461,106 @@ void blinkLED(uint8_t ledPin, uint8_t repeats, uint16_t duration) { //Flash an L
     delay(duration);                   // pause for a while
   }                                    // end loop
 }                                      // End function
+
+
+  //////////////MENU////////////MENU////////////MENU////////////MENU////////
+  //Display all of the following each time the main menu is called up.
+  void doMenu() {
+    byte menu = 1;
+    while (menu == 1) {
+      serial.println();
+      rtc.updateTime();
+      serial.println(showTime());          
+      serial.println("Device ID: " + String(deviceID)); //Display device ID
+      if(logMode == 'S') {serial.println("Logging mode: S (Data saved to SD card and Flash Mem)");}
+      if(logMode == 'F') {
+        serial.println("Logging mode: F (Data saved to flash mem only; no SD card logging)");
+        //SDOK = 0;     //Turns off SD logging
+      }
+      serial.println();
+  
+      // Ask the user for instruction and display the options
+      serial.println("What to do? (input capital letters)");
+      serial.println("    C = set clock");
+      serial.println("    B = Display backup memory and log history");
+  //    serial.println("    D = Display logging history");
+      serial.println("    E = Erase (reset) backup memory");
+      serial.println("    I = Set device ID");
+      serial.println("    M = Change logging mode");
+      serial.println("    W = Write flash data to SD card");
+  
+      //Get input from user or wait for timeout
+      char incomingByte = getInputByte(15000); 
+      String printThis = String("Value recieved: ") + incomingByte;
+      serial.println(printThis);
+      //serial.println(incomingByte, DEC);
+      if(incomingByte < 47) {    //Ignore punctuation and line returns and such.
+        incomingByte = 'X';
+      } 
+      switch (incomingByte) {                                               // execute whatever option the user selected
+        default:
+          menu = 0;         //Any non-listed entries - set menu to 0 and break from switch function. Move on to logging data
+          break;
+        case 'C': {                                                         // option to set clock
+            inputTime();                                                    // calls function to get time values from user
+            break;                                                        //  break out of this option, menu variable still equals 1 so the menu will display again
+          }
+        case 'I': {
+            inputID(4);   //  calls function to get a new feeder ID
+            break;       //  break out of this option, menu variable still equals 1 so the menu will display again
+          }
+        case 'E': {
+              serial.println("To proceed enter 'ERASE' in capital letters");  // Ask for user input
+              byte IDin = getInputString(10000);                  // Get input from user (specify timeout)
+              if((cArray1[0]=='E') && (cArray1[1]=='R') && (cArray1[2]=='A') && (cArray1[3]=='S') && (cArray1[4]=='E')) {                             // if the string is the right length...
+                eraseBackup('m');
+              }
+   
+              break;   //  break out of this option, menu variable still equals 1 so the menu will display again
+          }
+        case 'B': {
+            extractMemRFID(1);
+            extractMemLog(1);
+            break;       //  break out of this option, menu variable still equals 1 so the menu will display again
+          }
+  //      case 'D': {
+  //          writeMemLog();
+  //          break;       //  break out of this option, menu variable still equals 1 so the menu will display again
+  //        }
+        case 'M': {
+            readFlash(0x0D, cArray1, 1);  //get the logmode
+            logMode = cArray1[0];
+            if(logMode != 'S') {
+              cArray1[0] = 'S';
+              writeFlash(0x0D, cArray1, 1);
+              serial.println("Logging mode S");
+              serial.println("Data saved immediately SD card and Flash Mem");
+              if(SDOK == 0) {SDOK = 1;}
+            } else {
+              cArray1[0] = 'F';
+              writeFlash(0x0D, cArray1, 1);
+              serial.println("Logging mode F");
+              serial.println("Data saved to Flash Mem only (no SD card needed)");
+              SDOK = 0;
+            }
+            readFlash(0x0D, cArray1, 1);  //get the logmode
+            logMode = cArray1[0];
+            serial.println("log mode variable: ");
+            serial.println(logMode);
+            break;       //  break out of this option, menu variable still equals 1 so the menu will display again
+          }  
+          case 'W': {
+            if (SDOK == 1) {
+              extractMemRFID(2); //write RFID data to SD card
+              extractMemLog(2);  //write Log data to SD (always do this second so the file names match up).
+            } else {
+              serial.println("SD card missing");
+            }
+            break;       //  break out of this option, menu variable still equals 1 so the menu will display again
+          }  
+        } //end of switch
+    } //end of while(menu = 1)
+  }
 
 
 //Recieve a byte (charaacter) of data from the user- this times out if nothing is entered
