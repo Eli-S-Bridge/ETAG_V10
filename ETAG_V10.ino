@@ -344,11 +344,11 @@ void loop() { // Main code is here, it loops forever:
         serial.println("Going to sleep at ");                                // print log message
         serial.println(showTime());
      }
-     if(SDOK == 1 && logMode == 'S') {writeSDLine(12, flashData);}           // save log message if SD writes are enabled
      unixTime.unixLong = getUnix();
      //serial.println(unixTime.unixLong, DEC);
      char lg[5] = {12, unixTime.b1, unixTime.b2, unixTime.b3, unixTime.b4};
      logLoc = writeFlash(logLoc, lg, 5);
+     if(SDOK == 1 && logMode == 'S') {writeSDLine(12, lgt);}           // save log message if SD writes are enabled
      sleepAlarm();                                             // sleep using clock alarm for wakeup
      rtc.updateTime();                                         // get time from clock
      //SlpStr =  "Wake up from sleep mode at " + showTime();     // log message
