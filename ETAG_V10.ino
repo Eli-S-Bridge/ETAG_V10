@@ -195,10 +195,10 @@ uint16_t pauseCountDown = pauseTime / 31.25;        // Calculate pauseTime for 3
 byte pauseRemainder = ((100*pauseTime)%3125)/100;   // Calculate a delay if the pause period must be accurate
 //byte pauseRemainder = 0 ;                         // ...or set it to zero if accuracy does not matter
 
-const byte slpH = 11;                            // When to go to sleep at night - hour
-const byte slpM = 12;                            // When to go to sleep at night - minute
-const byte wakH = 11;                            // When to wake up in the morning - hour
-const byte wakM = 13;                            // When to wake up in the morning - minute
+const byte slpH = 99;                            // When to go to sleep at night - hour
+const byte slpM = 00;                            // When to go to sleep at night - minute
+const byte wakH = 99;                            // When to wake up in the morning - hour
+const byte wakM = 00;                            // When to wake up in the morning - minute
 const unsigned int slpTime = slpH * 100 + slpM;  // Combined hours and minutes for sleep time
 const unsigned int wakTime = wakH * 100 + wakM;  // Combined hours and minutes for wake time
 
