@@ -115,7 +115,7 @@ uint8_t ISO = 0;               //set to 1 to read ISO11874/5 tags, 0 = EM4100 ta
 
 char deviceID[5] = "RFID";            // User defined name of the device                 
 String deviceIDstr;                   // String verion of device name.
-char fName[13];                       // Used for writing to SD card
+//char fName[13];                       // Used for writing to SD card
 String dataFile;                      // Stores text file name for SD card writing.
 String logFile;                       // Stores text file name for SD card writing.
 
@@ -195,10 +195,10 @@ uint16_t pauseCountDown = pauseTime / 31.25;        // Calculate pauseTime for 3
 byte pauseRemainder = ((100*pauseTime)%3125)/100;   // Calculate a delay if the pause period must be accurate
 //byte pauseRemainder = 0 ;                         // ...or set it to zero if accuracy does not matter
 
-const byte slpH = 99;                            // When to go to sleep at night - hour
-const byte slpM = 00;                            // When to go to sleep at night - minute
-const byte wakH = 99;                            // When to wake up in the morning - hour
-const byte wakM = 00;                            // When to wake up in the morning - minute
+const byte slpH = 11;                            // When to go to sleep at night - hour
+const byte slpM = 12;                            // When to go to sleep at night - minute
+const byte wakH = 11;                            // When to wake up in the morning - hour
+const byte wakM = 13;                            // When to wake up in the morning - minute
 const unsigned int slpTime = slpH * 100 + slpM;  // Combined hours and minutes for sleep time
 const unsigned int wakTime = wakH * 100 + wakM;  // Combined hours and minutes for wake time
 
@@ -263,19 +263,19 @@ void setup() {  // setup code goes here, it is run once before anything else
   serial.print("Current log memory location: ");
   serial.println(logLoc, DEC);
   
-//  dataLine = getLine(52, 510, 128, 8191, 10);  //provide lines per page, last byte address for all pages, start page, end page, and bytes per line
-//  serial.print("Current RFID data line: "); serial.println(dataLine, DEC);
-//  logLine = getLine(105, 520, 8, 127, 5);
-//  serial.print("Current log data line: "); serial.println(logLine, DEC);
-
   readFlash(0x0D, cArray1, 1);  //get the logmode
   logMode = cArray1[0];         // define logmode variable
-  if(logMode != 'S' & logMode != 'F') { //If log mode is not established then do so
+  if(logMode != 'S' && logMode != 'F') { //If log mode is not established then do so
     serial.println("Setting log mode to Flash mode");
     cArray1[0] = 'F';
     writeFlash(0x0D, cArray1, 1);    
     logMode = 'F';
   }
+
+  deviceIDstr = String(deviceID);
+  logFile = String(deviceIDstr +  "LOG.TXT");
+  dataFile = String(deviceIDstr + "DATA.TXT");
+
 
   // Initialize SD card
   SDOK = 0;
@@ -287,8 +287,8 @@ void setup() {  // setup code goes here, it is run once before anything else
       testFile.close();
       SD.remove("test1234.txt");               // delete the dummy file                      
       SDstop();                                // may not be needed.
-      extractMemRFID(2); //write all stored RFID data to SD card,. This will update the file name for real time writing.
-      extractMemLog(2);  //write all stored Log data to SD (always do this second so the file names match up).
+      appendMemRFID();
+      appendMemLog();  
   } else {     
       serial.println("No SD card detected.");       // error message
       if(logMode == 'S') {;
@@ -307,20 +307,9 @@ void setup() {  // setup code goes here, it is run once before anything else
   } else {
     if(rtc.is12Hour()==true) {rtc.set24Hour();}   //Make sure we are in 24 hour mode??
   }
-  
+
   doMenu(); 
-  
-  rtc.updateTime();
-  
-  if(SDOK == 1 && logMode== 'S') {
-    serial.println("Writing start up to SD log file");
-    writeSDLine(11, cArray1);     //Just use a dummy character array
-  }
-  unixTime.unixLong = getUnix();
-  char logInfo[5] = {11, unixTime.b1, unixTime.b2, unixTime.b3, unixTime.b4};
-  logLoc = writeFlash(logLoc, logInfo, 5);
-  serial.println(logLoc);
-  
+   
   RFcircuit = 1;
   blinkLED(LED_RFID, 3,100);
 }
@@ -348,21 +337,22 @@ void loop() { // Main code is here, it loops forever:
      //serial.println(unixTime.unixLong, DEC);
      char lg[5] = {12, unixTime.b1, unixTime.b2, unixTime.b3, unixTime.b4};
      logLoc = writeFlash(logLoc, lg, 5);
-     if(SDOK == 1 && logMode == 'S') {writeSDLine(12, lg);}           // save log message if SD writes are enabled
+     if(SDOK == 1 && logMode == 'S') {writeSDLine(logFile, 12, lg);}           // save log message if SD writes are enabled
      sleepAlarm();                                             // sleep using clock alarm for wakeup
      rtc.updateTime();                                         // get time from clock
      //SlpStr =  "Wake up from sleep mode at " + showTime();     // log message
-     if(SDOK == 1 && logMode == 'S') {writeSDLine(12, flashData);}           // save log message if SD writes are enabled
      unixTime.unixLong = getUnix();
      //serial.println(unixTime.unixLong, DEC);
      lg[0]=13; lg[1]=unixTime.b1; lg[2]=unixTime.b2; lg[3]=unixTime.b3; lg[4]=unixTime.b4;
      logLoc = writeFlash(logLoc, lg, 5);
+     if(SDOK == 1 && logMode == 'S') {writeSDLine(logFile, 13, lg);}           // save log message if SD writes are enabled
   }
 
 //////Read Tags//////////////Read Tags//////////
 //Try to read tags - if a tag is read and it is not a recent repeat, write the data to the SD card and the backup memory.
 
   bool readSuc = 0; 
+  uint32_t oldMem;
   String SDsaveString; 
   if(ISO==1) { readSuc = ISOFastRead(RFcircuit, checkTime, pollTime1); } 
   if(ISO==0) { readSuc = FastRead(RFcircuit, checkTime, pollTime1); }
@@ -390,6 +380,7 @@ void loop() { // Main code is here, it loops forever:
     currRFID2 = (RFIDtagArray[4]<<8 + RFcircuit);                                                          //Put RFID code and Circuit into two variable to identify repeats
     unixTime.unixLong = getUnix();                      //Update unix time value to identify repeat reads and employ delay time.
     if((currRFID != pastRFID) | (currRFID2 != pastRFID2) | (unixTime.unixLong-unixPast >= delayTime)) {                      // See if the tag read is a recent repeat
+      oldMem = memLoc;
       if(ISO==0) {
           flashData[0]=RFcircuit; 
           flashData[1]=RFIDtagArray[0]; flashData[2]=RFIDtagArray[1]; flashData[3]=RFIDtagArray[2]; flashData[4]=RFIDtagArray[3]; flashData[5]=RFIDtagArray[4];      // Create an array representing an entire line of data
@@ -404,7 +395,8 @@ void loop() { // Main code is here, it loops forever:
           memLoc = writeFlash(memLoc, flashData, 12);   //write array  
       }
       if(SDOK == 1 & logMode == 'S') {
-         writeSDLine(0, cArray1);
+         if(Debug) {serial.println("Storing on SD card and flash memory.");}
+         writeSDLine(dataFile, 0, cArray1);
       }
 
      pastRFID = currRFID;            //First of three things to identify repeat reads
@@ -413,8 +405,8 @@ void loop() { // Main code is here, it loops forever:
      if(Debug) {
         //serial.print(SDsaveString); 
         serial.print(cArray1);
-        serial.print(" logged to memory "); 
-        serial.println(memLoc-10);
+        serial.print(" logged to flash address "); 
+        serial.println(oldMem);
       }
     } else {
       if(Debug) serial.println("Repeat - Data not logged");                             // Message to indicate repeats (no data logged)
@@ -439,7 +431,7 @@ void loop() { // Main code is here, it loops forever:
   }
 
 //Alternate between circuits (comment out to stay on one cicuit).
-   //RFcircuit == 1 ? RFcircuit = 2 : RFcircuit = 1; //if-else statement to alternate between RFID circuits
+   RFcircuit == 1 ? RFcircuit = 2 : RFcircuit = 1; //if-else statement to alternate between RFID circuits
 
 }
 
@@ -481,13 +473,13 @@ void blinkLED(uint8_t ledPin, uint8_t repeats, uint16_t duration) { //Flash an L
   
       // Ask the user for instruction and display the options
       serial.println("What to do? (input capital letters)");
-      serial.println("    C = set clock");
-      serial.println("    B = Display backup memory and log history");
-  //    serial.println("    D = Display logging history");
-      serial.println("    E = Erase (reset) backup memory");
-      serial.println("    I = Set device ID");
-      serial.println("    M = Change logging mode");
-      serial.println("    W = Write flash data to SD card");
+      serial.println("  C = set clock");
+      serial.println("  B = Display backup memory and log history");
+  //    serial.println("  D = Display logging history");
+      serial.println("  E = Erase (reset) backup memory");
+      serial.println("  I = Set device ID");
+      serial.println("  M = Change logging mode");
+      serial.println("  W = Write ALL flash data to SD card (includes duplicates)");
   
       //Get input from user or wait for timeout
       char incomingByte = getInputByte(15000); 
@@ -519,8 +511,8 @@ void blinkLED(uint8_t ledPin, uint8_t repeats, uint16_t duration) { //Flash an L
               break;   //  break out of this option, menu variable still equals 1 so the menu will display again
           }
         case 'B': {
-            extractMemRFID(1);
-            extractMemLog(1);
+            extractMemRFID(1, datStart);
+            extractMemLog(1, logStart);
             break;       //  break out of this option, menu variable still equals 1 so the menu will display again
           }
   //      case 'D': {
@@ -551,8 +543,8 @@ void blinkLED(uint8_t ledPin, uint8_t repeats, uint16_t duration) { //Flash an L
           }  
           case 'W': {
             if (SDOK == 1) {
-              extractMemRFID(2); //write RFID data to SD card
-              extractMemLog(2);  //write Log data to SD (always do this second so the file names match up).
+              extractMemRFID(3, datStart); //write RFID data to SD card
+              extractMemLog(3, logStart);  //write Log data to SD (always do this second so the file names match up).
             } else {
               serial.println("SD card missing");
             }
@@ -560,7 +552,16 @@ void blinkLED(uint8_t ledPin, uint8_t repeats, uint16_t duration) { //Flash an L
           }  
         } //end of switch
     } //end of while(menu = 1)
-  }
+    rtc.updateTime();
+    unixTime.unixLong = getUnix();
+    char logInfo[5] = {11, unixTime.b1, unixTime.b2, unixTime.b3, unixTime.b4};
+    serial.print("writing start info to log at "); serial.println(logLoc);
+    logLoc = writeFlash(logLoc, logInfo, 5);
+    if(SDOK == 1 && logMode== 'S') {
+      serial.println("Writing start up to SD log file");
+      writeSDLine(logFile, 11, logInfo);     //log to SD card file
+    }
+}
 
 
 //Recieve a byte (charaacter) of data from the user- this times out if nothing is entered
@@ -678,7 +679,15 @@ uint32_t getUnix() {
     return (((rtc.getDate()-1+dm+((y+1)>>2)-((y+69)/100)+((y+369)/100/4)+365*(y-my))*24ul+rtc.getHours())*60ul+rtc.getMinutes())*60ul+rtc.getSeconds();
 }
 
- void convertUnix(uint32_t t) { //Stores time values to timeIn[12]
+uint32_t getUnix2(byte yr, byte mo, byte da, byte hh, byte mm, byte ss) {
+    int8_t my = (mo >= 3) ? 1 : 0;
+    uint16_t y = (yr+2000) + my - 1970;
+    uint16_t dm = 0;
+    for (int i = 0; i < mo - 1; i++) dm += (i<7)?((i==1)?28:((i&1)?30:31)):((i&1)?31:30);
+    return (((da-1+dm+((y+1)>>2)-((y+69)/100)+((y+369)/100/4)+365*(y-my))*24ul+hh)*60ul+mm)*60ul+ss;
+}
+
+ void convertUnix(uint32_t t) { //Takes a unix number and stores various time values to timeIn[12]
         t += 0 * 3600ul;
         timeIn[5] = t % 60ul;   //Seconds stored in timeIn[5]
         t /= 60ul;
@@ -722,7 +731,7 @@ void flashOff(void) {           // Disable the flash chip
   digitalWrite(FlashCS, HIGH);  // deactivate Flash memory
 }
 
-uint32_t writeFlash(unsigned long fLoc, char *cArr, byte nchar) {  //write bytes in array; must send array, but can read single byte if nchar=1.
+uint32_t writeFlash(unsigned long fLoc, char *cArr, uint16_t nchar) {  //write bytes in array; must send array, but can read single byte if nchar=1.
   uint16_t addr = fLoc%528;                //calculate byte address
   uint32_t wAddr = ((fLoc/528)<<10) + addr;  //calculate full flash address 
   flashOn();                               // activate flash chip
@@ -743,7 +752,7 @@ uint32_t writeFlash(unsigned long fLoc, char *cArr, byte nchar) {  //write bytes
 //        serial.println(cArr[n]);
         }
      flashOff();                            // turn off SPI
-     delay(15);                              // delay, In datasheet 4ms needed to complete write - in practice about 15.
+     delay(30);                              // delay, In datasheet 4ms needed to complete write - in practice about 15, sometimes longer.
      //serial.println("crossing page boundary");
      wAddr = ((fLoc/528)+1)<<10;            // calculate new flash address by advancing the page and setting byte address to 0
      flashOn();
@@ -757,26 +766,26 @@ uint32_t writeFlash(unsigned long fLoc, char *cArr, byte nchar) {  //write bytes
         }         
   }
   flashOff();                            // turn off SPI
-  delay(15);
+  delay(20);
   return fLoc + nchar;                   // calculate next flash location
 }
 
-void readFlash(uint32_t fLoc, char *carr, byte nchar) {  // read one or more bytes from flash memory; must send array, but can read single bytes
-  uint16_t addr = fLoc%528;                //calculate byte address
+void readFlash(uint32_t fLoc, char *carr, uint16_t nchar) {  // read one or more bytes from flash memory; must send array, but can read single bytes
+  uint16_t addr = fLoc%528;                  //calculate byte address
   uint32_t wAddr = ((fLoc/528)<<10) + addr;  //calculate full flash address
-  flashOn();                              // activate flash chip
-  SPI.transfer(0x03);                     // opcode for low freq read
-  SPI.transfer((wAddr >> 16) & 0xFF);      // first of three address bytes
-  SPI.transfer((wAddr >> 8) & 0xFF);       // second address byte
-  SPI.transfer(wAddr & 0xFF);              // third address byte
+  flashOn();                                 // activate flash chip
+  SPI.transfer(0x03);                        // opcode for low freq read
+  SPI.transfer((wAddr >> 16) & 0xFF);        // first of three address bytes
+  SPI.transfer((wAddr >> 8) & 0xFF);         // second address byte
+  SPI.transfer(wAddr & 0xFF);                // third address byte
   //  if(nchar==1){carr[0] = SPI.transfer(0);}
-  if(nchar + addr <= 527) {                 // If a page overflow will no happen write all the bytes
+  if(nchar + addr <= 527) {                 // If a page overflow will not happen read all the bytes
     for (int n = 0; n < nchar; n++) {
       carr[n] = SPI.transfer(0);            // read the byte
       //serial.println(carr[n]);
       }       
   }
-  if(nchar + addr > 527) {                    // If a page overflow will happen write as many bytes as possible
+  if(nchar + addr > 527) {                    // If a page overflow will happen read as many bytes as possible
     //serial.println("Page cross read.");
     for (int n = 0; n <= 527-addr; n++) {
       carr[n] = SPI.transfer(0);
@@ -816,6 +825,10 @@ void inputID(uint32_t writeAddr) {                                         // Fu
 
 void getLogMessage(uint8_t x1) {
   //serial.print(x1);
+  // "Logging_started" = 11
+  // "Going_to_sleep_" = 12
+  // "Wake_from_sleep" = 13
+  
   if(x1 == 11) {
     logMess[0]='L'; logMess[1]='o'; logMess[2]='g'; logMess[3]='g'; logMess[4]='i'; 
     logMess[5]='n'; logMess[6]='g'; logMess[7]='_'; logMess[8]='s'; logMess[9]='t'; 
@@ -824,7 +837,7 @@ void getLogMessage(uint8_t x1) {
   if(x1 == 12) {
     logMess[0]='G'; logMess[1]='o'; logMess[2]='i'; logMess[3]='n'; logMess[4]='g'; 
     logMess[5]='_'; logMess[6]='t'; logMess[7]='o'; logMess[8]='_'; logMess[9]='s'; 
-    logMess[10]='l'; logMess[11]='e'; logMess[12]='e'; logMess[13]='p'; logMess[14]='\0';
+    logMess[10]='l'; logMess[11]='e'; logMess[12]='e'; logMess[13]='p'; logMess[14]='_';
     logMess[15]='\0';}
   if(x1 == 13) {
     logMess[0]='W'; logMess[1]='a'; logMess[2]='k'; logMess[3]='e'; logMess[4]='_'; 
@@ -871,376 +884,638 @@ void eraseBackup(char eMode) {  //erase chip and replace stored info
   }
 }
 
-void extractMemRFID(uint8_t prntWrt) {  //Takes data from Flash and prints to screen and/or writes to SD card
-  //write all RFID data to SD card
+void showFlash (uint32_t fStart, uint32_t fEnd) {  
+  serial.println("Printing full flash memory");
+  char flashArr[12];
+  uint32_t jc;
+  while(fStart < fEnd) {
+     jc = 10;
+     serial.print(fStart, DEC); serial.print("   ");
+     readFlash(fStart, flashArr, 12);
+     for(uint8_t i=0; i < 10; i++) {
+        serial.print(flashArr[i], HEX); serial.print(" ");
+     }
+     if(flashArr[0] == 129) {
+      for(uint8_t i=10; i < 12; i++) {
+          serial.print(flashArr[i], HEX); serial.print(" ");
+       }
+       jc = 12;
+     }
+     serial.println();
+     fStart = fStart + jc;
+  } 
+}
+
+
+void appendMemLog() { //// Read in last log line on SD card. Find matching line in Flash, Write remaining data to SD.
+  char SDArray[37];   // Array with 250 bytes
+  for(uint8_t i = 0; i < 250; i++) {SDArray[i] = 0xFF;} //initialize array.
+  char logLine[5];     //
+  char flashArr[500]; //large array for reading flash data.
+  uint32_t startPos = 0;    // start position for matching lines.
+  uint32_t posSD = 0;  // SD card file position
+  uint32_t fLen;       // length of SD card file
+  uint32_t fLoc;       // flash data location
+  
+  File myfile;     // for reading from SD
+
+  //First check make sure flash log has at least one line of data
+  if((logLoc - logStart) < 3) {
+    serial.println("No log data to transfer");
+    return;
+  }
+
+  //Get last line of SD file  
+  if(SDOK == 1) {
+    SDstart();
+    if (!SD.exists(logFile)) {
+      serial.println("No log file detected on SD card, need to make new SD file");
+      extractMemLog(3, logStart);  //dump all data to sd card here....
+      return;
+    }
+    if (SD.exists(logFile)) {
+      myfile = SD.open(logFile, FILE_READ);
+      fLen = myfile.size();
+      if(fLen < 38) { //no data or corrupt data in file, erase file and write all flash memory
+        myfile.close();               //Close file 
+        SD.remove(logFile);           //Delete the file that may have bad data
+        extractMemRFID(3, logStart);  //Write all flash data to new file
+        return;
+      }
+      if((fLen > 35) && fLen < 75) { posSD = 0; }  // only one line. SD card file position for first line
+      if(fLen >= 75) { posSD = fLen - 38; }
+      //serial.print("file length: "); serial.println(fLen , DEC);
+      //serial.print("getting last line from: "); serial.println(posSD, DEC);
+      myfile.seek(posSD);
+
+      for(uint8_t i = 0; i < 37; i++) {
+        SDArray[i] = myfile.read();
+        }      
+      compressLogLine(SDArray, logLine);
+
+
+      //now seek to match logLine with data in flash
+      fLoc = logStart;                 //Start at beginning of log data
+      //serial.print("fLoc: "); serial.println(fLoc, DEC);
+      uint16_t fA1 = 0;
+      while((fLoc < logLoc) && (startPos == 0)) {
+        //serial.println("Reading flash");
+        readFlash(fLoc, flashArr, 500);
+        for(fA1 = 0; fA1 < 495; fA1 = fA1 + 5) {
+           //serial.print("Matching "); serial.print(flashArr[fA1], HEX); serial.print(flashArr[fA1+1], HEX); serial.print(flashArr[fA1+2], HEX); serial.print(flashArr[fA1+3], HEX); serial.println(flashArr[fA1+4], HEX);
+           //serial.print("with "); serial.print(logLine[0], HEX); serial.print(logLine[1], HEX); serial.print(logLine[2], HEX); serial.print(logLine[3], HEX); serial.println(logLine[4], HEX);
+           if((logLine[0]==flashArr[fA1]) && (logLine[1]==flashArr[fA1+1]) && (logLine[2]==flashArr[fA1+2]) && (logLine[3]==flashArr[fA1+3]) && (logLine[4]==flashArr[fA1+4])) {
+              startPos = fLoc + fA1 + 5;  //Add five to get to next line.
+              serial.print("Matching log data found on SD card. ");
+              if(startPos >= logLoc) {
+                serial.println("Log Data up to date, no data transfer needed.");
+                return; 
+              }
+              serial.print("Appending new data starting at "); serial.println(startPos, DEC);
+              extractMemLog(3, startPos);
+              return;
+           }
+           if(flashArr[fA1]==0xFF) {
+              serial.print("end of flash data - no match - append everything."); 
+              extractMemLog(3, logStart);
+              return;
+           }
+           
+        }
+        fLoc = fLoc + fA1;
+        //serial.print("fLoc is now "); serial.println(fLoc, DEC);
+      }
+    }
+  }
+}
+
+
+
+void appendMemRFID() { // Read in last line from SD card. Find matching line in Flash, Write remaining data to SD.
+  //serial.println("Appending RFID data to SD card.");
+  char SDArray[50];   // Array with 250 bytes
+  for(uint8_t i = 0; i < 250; i++) {SDArray[i] = 0xFF;} //initialize array.
+  char flashArr[500]; //large array for reading flash data.
+  char SDline[50]; //array used for Flash data matching
+  uint8_t startPos;    // start position for SD array compression/processing
+  uint8_t stopPos;    // start position for SD array compression/processing
+  uint32_t posSD = 0;  // SD card file position
+  uint32_t fLen;       // length of SD card file
+  uint32_t fLoc;
+  File myfile;     // for reading from SD
+
+  //First check make sure flash has at least one line of data
+  if((memLoc - datStart) < 9) {
+    serial.println("No RFID data to transfer");
+    return;
+  }
+
+  //Get last line of SD file  
+  if(SDOK == 1) {
+    //serial.print("Reading last line from SD card file: "); serial.println(dataFile);
+        SDstart();
+    if (!SD.exists(dataFile)) {
+      serial.println("No RFID file detected on SD card, need to make new sd file");
+      extractMemRFID(3, datStart);  //dump all data to sd card here....
+      return;
+    }
+    if (SD.exists(dataFile)) {
+      myfile = SD.open(dataFile, FILE_READ);
+      fLen = myfile.size();
+      if(fLen < 36) { //no data or corrupt data in file, erase file and write all flash memory
+        myfile.close();         //Close file 
+        SD.remove(dataFile);    //Delete the file that may have bad data
+        extractMemRFID(3, datStart);
+        return;
+      }
+      
+      fLen < 50 ? posSD = 0 : posSD = fLen-50;
+      //serial.print("reading characters starting at number "); serial.println(posSD, DEC);
+      myfile.seek(posSD);   //go to read start position
+      uint8_t lineLen = 35;     // 1 indicates ISO line, 0 indicated EM4100 line
+      
+      for(uint8_t i = 0; i < 50; i++) {
+        uint8_t SB1 = myfile.read();
+        if(posSD == 0) {SDArray[i] = SB1;}
+        if((posSD == 0) & (i == fLen)) {
+          lineLen = fLen - 1; 
+          break;
+        }
+        if(posSD > 0) {
+          if(SB1 == 13) {  //look for carriage return
+            if(i < 10) {lineLen = 44;} // if i is less than 10 then the data line must be longer than 40 
+            SB1 = myfile.read(); //Read but ignore - should be line feed
+            for(uint8_t j = 0; j < lineLen; j++) {
+               SDArray[j] = myfile.read();
+            }    
+          }
+        }
+      }
+
+      uint8_t SDLineBytes = compressSDLine(SDArray, SDline, lineLen);
+//      serial.println(); serial.println();
+
+      //Loop through flash data to find the matching line.
+      uint8_t BX = SDline[6];                   //default match for low byte of timestamp is 6th byth of byte array
+      if(SDLineBytes == 12) {BX = SDline[8];}   //change to 8th byte for ISO tags
+      fLoc = datStart;                          //Start at beginning of flash data
+      while(fLoc < memLoc) {
+        uint16_t fA1 = 0;
+        readFlash(fLoc, flashArr, 500);
+        while(fA1 < 485) {
+          //serial.print("evaluating flash data at "); serial.println(fLoc+fA1, DEC);
+          if(flashArr[fA1] == 0xFF) {
+             serial.println("No matching RFID data found - appending all of flash memory.");
+             extractMemRFID(3, datStart);
+             return;
+          }
+          uint8_t lineLen = 0;
+          if(flashArr[fA1] < 100) {lineLen = 10;} else {lineLen = 12;} //detect tag type and set line length
+            if(flashArr[fA1+lineLen-4] == BX){
+              bool match = compareArrays(flashArr, SDline, fA1, 0, SDLineBytes);
+              if(match) {
+                uint32_t startPoint = fLoc + fA1 + SDLineBytes;  
+                serial.print("Matching RFID data found on SD card. ");  //serial.println(startPoint, DEC);
+                if(startPoint < memLoc) {
+                  serial.print(" Appending new data starting at "); serial.println(startPoint, DEC);
+                  extractMemRFID(3, startPoint);      
+                return;
+                } else {
+                  serial.println("RFID Data up to date, no data transfer needed.");
+                  serial.println();
+                  return;
+                } 
+              }
+            }
+          fA1 = fA1 + lineLen;
+          }
+          fLoc = fLoc + fA1;
+      } 
+      // no match if you made it this far. Append everything
+      serial.println("No matching data found - appending everything from flash memory.");
+      extractMemRFID(3, datStart);
+      return;
+    }
+  }
+}
+
+
+
+boolean compareArrays(char *a, char *b, uint16_t start_a, uint16_t start_b, uint8_t len) { //define arrays, start points, and lenght of comparison
+      // test each element to be the same. if not, return false
+      //serial.println("checking bytes ");
+      uint16_t m = start_b;
+      for (uint16_t n = start_a; n < len + start_a; n++) {
+        //serial.print("iteration "); serial.print(n, DEC); serial.print(": "); serial.print(a[n], HEX); serial.print(" vs "); serial.println(b[m], HEX);
+        if (a[n] != b[m]) {
+          //serial.println("FAIL!!");
+          return false;
+        }
+        m++;
+      }
+      //serial.println(); serial.println("all matches OK");
+      return true; //if you get this far all matches are OK
+}
+
+uint8_t compressLogLine(char *SDarr, char *line) { //SDarr = array of chars, line = array to write compressed data, lfn = first byte of input charater array, lnSt = where to start writing, leng = how many bytes in each character line. 
+  // "Logging_started" = 11
+  // "Going_to_sleep_" = 12
+  // "Wake_from_sleep" = 13
+  
+//  serial.print("Compressing line: ");
+//  for(uint8_t i = 0; i < 37; i++){
+//    serial.print(SDarr[i]); 
+//  }
+//  serial.println();
+  
+  switch(SDarr[0])
+  {
+    case 'L' : line[0] = 11; break;
+    case 'G' : line[0] = 12; break;
+    case 'W' : line[0] = 13; break;
+  }
+  
+  byte mo = (char2hex(SDarr[17])*10) + char2hex(SDarr[18]);
+  byte da = (char2hex(SDarr[20])*10) + char2hex(SDarr[21]);
+  byte yr = (char2hex(SDarr[25])*10) + char2hex(SDarr[26]);
+  byte hh = (char2hex(SDarr[28])*10) + char2hex(SDarr[29]);
+  byte mm = (char2hex(SDarr[31])*10) + char2hex(SDarr[32]);
+  byte ss = (char2hex(SDarr[34])*10) + char2hex(SDarr[35]);
+  
+  //serial.print(mo,DEC); serial.print(" "); serial.print(da,DEC); serial.print(" "); serial.print(yr,DEC); serial.print(" "); serial.print(hh,DEC); serial.print(" "); serial.print(mm,DEC); serial.print(" "); serial.print(mo,DEC); serial.print(" "); serial.print(ss,DEC); serial.println(" "); 
+  
+  unixTime.unixLong = getUnix2(yr, mo, da, hh, mm, ss);
+  line[1] = unixTime.b1;
+  line[2] = unixTime.b2;
+  line[3] = unixTime.b3;
+  line[4] = unixTime.b4;
+
+  //serial.print(line[1], HEX); serial.print(" "); serial.print(line[1], HEX); serial.print(" "); serial.print(line[2], HEX); serial.print(" "); serial.print(line[3], HEX); serial.print(" "); serial.println(line[4], HEX);
+
+}
+
+uint8_t compressSDLine(char *SDarr, char *line, uint8_t leng) { //SDarr = array of chars, line = array to write compressed data, lfn = first byte of input charater array, lnSt = where to start writing, leng = how many bytes in each character line. 
+  serial.println();
+  if(leng > 38) { //longer than 34 = ISO tag
+    //serial.println("Compressing ISO tag.");
+    line[0] = char2hex(SDarr[21]) | 0b10000000;
+    countryCode = (char2hex(SDarr[0]) << 8) + (char2hex(SDarr[1]) << 4) + char2hex(SDarr[2]);
+    line[6] = countryCode >> 2;      //country code is encoded across two byte, and byte are read in reverse order for ISO tags.
+    line[5] = (char2hex(SDarr[4]) << 4) + char2hex(SDarr[5]); 
+    line[5] = (line[5] & 0b00111111) + (countryCode << 6);     // tack on two bits from country code.
+    line[4] = (char2hex(SDarr[6]) << 4) + char2hex(SDarr[7]);
+    line[3] = (char2hex(SDarr[8]) << 4) + char2hex(SDarr[9]);
+    line[2] = (char2hex(SDarr[10]) << 4) + char2hex(SDarr[11]);
+    line[1] = (char2hex(SDarr[12]) << 4) + char2hex(SDarr[13]);
+    line[7] = (char2hex(SDarr[16]) * 100) + (char2hex(SDarr[17]) * 10) + char2hex(SDarr[18]);
+    byte mo = (char2hex(SDarr[24])*10) + char2hex(SDarr[25]);
+    byte da = (char2hex(SDarr[27])*10) + char2hex(SDarr[28]);
+    byte yr = (char2hex(SDarr[32])*10) + char2hex(SDarr[33]);
+    byte hh = (char2hex(SDarr[35])*10) + char2hex(SDarr[36]);
+    byte mm = (char2hex(SDarr[38])*10) + char2hex(SDarr[39]);
+    byte ss = (char2hex(SDarr[41])*10) + char2hex(SDarr[42]);
+    unixTime.unixLong = getUnix2(yr, mo, da, hh, mm, ss);
+    line[8] = unixTime.b1;
+    line[9] = unixTime.b2;
+    line[10] = unixTime.b3;
+    line[11] = unixTime.b4;
+
+//    for(uint8_t i = 0; i<12; i++) {
+//      serial.print(line[i], HEX); serial.print(" ");
+//    }
+    return 12;
+  }
+  if(leng < 38) { //shorter than 34 = EM4100 tag
+    //serial.println("Compressing EM4100 tag.");
+    line[0] = char2hex(SDarr[12]);
+    line[1] = (char2hex(SDarr[0]) << 4) + char2hex(SDarr[1]); 
+    line[2] = (char2hex(SDarr[2]) << 4) + char2hex(SDarr[3]);
+    line[3] = (char2hex(SDarr[4]) << 4) + char2hex(SDarr[5]);
+    line[4] = (char2hex(SDarr[6]) << 4) + char2hex(SDarr[7]);  
+    line[5] = (char2hex(SDarr[8]) << 4) + char2hex(SDarr[9]);
+    //serial.print(" - "); serial.print(" ")
+    byte mo = (char2hex(SDarr[15])*10) + char2hex(SDarr[16]);
+    byte da = (char2hex(SDarr[18])*10) + char2hex(SDarr[19]);
+    byte yr = (char2hex(SDarr[23])*10) + char2hex(SDarr[24]);
+    byte hh = (char2hex(SDarr[26])*10) + char2hex(SDarr[27]);
+    byte mm = (char2hex(SDarr[29])*10) + char2hex(SDarr[30]);
+    byte ss = (char2hex(SDarr[32])*10) + char2hex(SDarr[33]);
+    //serial.print(mo, DEC); serial.print(da, DEC); serial.print(yr, DEC); serial.print(hh, DEC); serial.print(mm, DEC); serial.print(ss, DEC);
+    unixTime.unixLong = getUnix2(yr, mo, da, hh, mm, ss);
+    //serial.print(" "); serial.print(unixTime.unixLong, DEC);
+    line[6] = unixTime.b1;
+    line[7] = unixTime.b2;
+    line[8] = unixTime.b3;
+    line[9] = unixTime.b4;
+
+//    for(uint8_t i = 0; i<10; i++) {
+//      serial.print(line[i], HEX); serial.print(" ");
+//    }
+    return 10;
+  }
+}
+
+
+char char2hex(char ch)
+{
+  char rT;
+  switch(ch)
+  {
+    case '0': rT = 0; break;
+    case  '1' : rT = 1; break;
+    case  '2': rT = 2; break;
+    case  '3': rT = 3; break;
+    case  '4' :rT = 4; break;
+    case  '5': rT = 5; break;
+    case  '6': rT = 6; break;
+    case  '7': rT = 7; break;
+    case  '8': rT = 8; break;
+    case  '9': rT = 9; break;
+    case  'A': rT = 10; break;
+    case  'B': rT = 11; break;
+    case  'C': rT = 12; break;
+    case  'D': rT = 13; break;
+    case  'E': rT = 14; break;
+    case  'F' : rT = 15; break;
+    default: rT = 0; break;
+  }
+  return rT;
+}
+
+
+void extractMemRFID(uint8_t prntWrt, uint32_t flashStart) {  //Takes data from Flash and prints to screen and/or writes to SD card
+  if(memLoc <= flashStart) {
+    serial.println("no RFID data to write");
+    return;
+  }
   bool prnt = bitRead(prntWrt, 0);
   bool wrt = bitRead(prntWrt, 1);
-  File dataFile;
+  char BA[500];           //define byte array to store (500 bytes)
+  uint32_t dMem = flashStart;  //counter for memory position
+  File myFile;
+
+  //Check if file on SD card exists. if not create it.
   if(wrt && SDOK == 1) {
     SDstart();
-    serial.println("Writing RFID data to SD card.");
-    fName[0] = deviceID[0]; fName[1]= deviceID[1]; fName[2]= deviceID[2]; fName[3]= deviceID[3];
-    fName[4]='_'; fName[5]='D'; fName[6]='0'; fName[7]='0'; fName[8]='.'; fName[9]='T'; fName[10]='X';
-    fName[11]='T'; fName[12]='\0';
-    while (SD.exists(fName)) {
-      //serial.print("File Exists!!  ");   // Message to user
-      //serial.println(fName);
-      fName[7] = fName[7] + 1;
-      if(fName[7] > 57) {
-        fName[7]=48;
-        fName[6]=fName[6]+1;
-        if(fName[6] > 57){
-           fName[6]=65;
-        }
-        if(fName[6] > 90){
-           fName[6]=48;
-           fName[4]='X';
-        }
-      }
+    if(!SD.exists(dataFile)) {
+      serial.println("Creating new file on SD card");
+      myFile = SD.open(dataFile, FILE_WRITE);
+      delay(10);
+      myFile.close();
     } 
-    dataFile = SD.open(fName, FILE_WRITE);
-    if (dataFile) {
-       serial.print("Writing data to new file: ");
-       serial.println(fName);
-       dataFile.close();
-       SDstop();
-    } else {
-      serial.print("New file not created: ");
-      serial.println(fName);
-    }
+    
+    //else {
+    //  serial.println("file on SD card found");
+    //}
+    //SDstop();
   }
-  if(prnt) {
-    serial.println("Printing Flash Memory - RFID...");
-    serial.println();
-  }
-//     serial.print("Writing from memLoc  ");
-//     serial.print(datStart);
-//     serial.print(" to ");
-//     serial.println(memLoc);
+  
+  serial.print("transferring data from "); serial.print(flashStart, DEC); serial.print(" to "); serial.println(memLoc, DEC);
+  while(dMem < memLoc) {                 // read batches of flash data until end of data is reached.   
+     //showFlash(dMem, dMem+500);
+     digitalWrite(LED_RFID, LOW);   // Flash LED to indicate progress             
+     readFlash(dMem, BA, 500);       // Read in batch of data
 
-  if(memLoc > datStart) {     //proceed only if there are data - write nothing if there are no data
-    byte BA[540];             //define byte array to store a full page (528 bytes) plus 12 extra bytes
-    int b = 0;
-    uint32_t dMem = datStart;  
-    while(dMem < memLoc) {                 // read in full pages one at a time until last page is reached.
-       digitalWrite(LED_RFID, LOW);                 // Flash LED to indicate progress             
-       uint32_t pAddr = dMem/528;
-       if(wrt && SDOK == 1) {
-          serial.print("Transfering RFID data from page ");   // progress message  
-          serial.println(pAddr, DEC);
-       }
-       pAddr = pAddr << 10;   
-        //     Make the page address a full address with byte address as zero.
-        //     serial.print("current flash Address ");      // progress message  
-        //     serial.println(fAddress, DEC);
-        //     serial.print("last flash Address page ");         // progress message  
-        //     serial.println(flashAddr>>10, DEC);
-       flashOn();
-       SPI.transfer(0x03);                         // opcode for low freq read
-       SPI.transfer((pAddr >> 16) & 0xFF);      // write most significant byte of Flash address
-       SPI.transfer((pAddr >> 8) & 0xFF);       // second address byte
-       SPI.transfer(0);                            // third address byte
-       
-       //SPI.transfer(BA, 540);                  // might work for reading in full page?? needs test.
-       
-       for (int n = 0; n < 539; n++) {           //read in 540 bytes - page crossover should be OK. 
-         BA[n] = SPI.transfer(0);                
-         //serial.print(BA[n]);
-       }    
-       digitalWrite(LED_RFID, HIGH);
-       flashOff();
+     digitalWrite(LED_RFID, HIGH);  // Flash LED to indicate progress 
+     flashOff();                    // Make sure flash is off 
+     //serial.print("Flash batch read in starting at "); serial.println(dMem, DEC);
+     uint16_t b = 0;                // initialize byte counter
 
-       if(wrt && SDOK == 1) {
-          SDstart();
-          dataFile = SD.open(fName, FILE_WRITE);
-       }
-       while(b < 528) {
-          if(BA[b] != 0xFF) {
-            //serial.print("Writing line to SD ");
-            //serial.println(b, DEC);
-            //serial.println(BA[b], BIN);
-            if(BA[b] > 100) {
-               //serial.println("process ISO data line");
-               unixTime.b1 = BA[b+8]; unixTime.b2 = BA[b+9]; unixTime.b3 = BA[b+10]; unixTime.b4 = BA[b+11];
-               convertUnix(unixTime.unixLong);  // covert unix time. Time values get stored in array timeIn, bytes 0 through 5.
-               static char text[41]; 
-               countryCode = (BA[b+6]<<2) + (BA[b+5]>>6);
-               sprintf(text, "%03X.%02X%02X%02X%02X%02X, %03d, %d, %02d/%02d/%04d %02d:%02d:%02d",
+     //Write lines to SD card and/or serial
+     if(wrt && (SDOK == 1)) {  //open SD card file if needed
+         myFile = SD.open(dataFile, FILE_WRITE);  //Open for appending new data to file
+     } 
+     
+     while((b < 480) & (dMem < memLoc)) {       //Don't go through end of array, in case of cutting off data lines.
+        //serial.print("first byte of line at position "); serial.print(b, DEC); serial.print(" is "); serial.println(BA[b], HEX);
+        if((BA[b] == 129) | (BA[b] == 130)) {
+            //serial.println("Writing ISO line");
+            unixTime.b1 = BA[b+8]; unixTime.b2 = BA[b+9]; unixTime.b3 = BA[b+10]; unixTime.b4 = BA[b+11];
+            convertUnix(unixTime.unixLong);  // convert unix time. Time values get stored in array timeIn, bytes 0 through 5.
+            static char text[41]; 
+            countryCode = (BA[b+6]<<2) + (BA[b+5]>>6);
+            sprintf(text, "%03X.%02X%02X%02X%02X%02X, %03d, %d, %02d/%02d/%04d %02d:%02d:%02d",
                  countryCode, (BA[b+5] & 0b00111111), BA[b+4], BA[b+3], BA[b+2], BA[b+1], BA[b+7], (BA[b] & 0x0F),  
                  timeIn[0], timeIn[1], timeIn[2], timeIn[3], timeIn[4], timeIn[5]);
-               if(prnt) {serial.println(text);}
-               if(wrt && SDOK == 1) {dataFile.println(text);}
-               b = b + 12;
-            } else {
-               //serial.println("process EM4100 tag line");
-               unixTime.b1 = BA[b+6]; unixTime.b2 = BA[b+7]; unixTime.b3 = BA[b+8]; unixTime.b4 = BA[b+9];
-               convertUnix(unixTime.unixLong);
-               static char text[41];
-               sprintf(text, "%02X%02X%02X%02X%02X, %d, %02d/%02d/%04d %02d:%02d:%02d",
+            //if(prnt) {serial.print(dMem, DEC); serial.print(" "); serial.println(text);}
+            if(prnt) {serial.println(text);}
+            if(wrt && SDOK == 1) {myFile.println(text);}
+            b = b + 12;
+            dMem = dMem + 12;
+         } 
+         if((BA[b] == 1) | (BA[b] == 2)) {
+            //serial.println("Writing EM4100 line");
+            unixTime.b1 = BA[b+6]; unixTime.b2 = BA[b+7]; unixTime.b3 = BA[b+8]; unixTime.b4 = BA[b+9];
+            convertUnix(unixTime.unixLong);
+            static char text[41];
+            sprintf(text, "%02X%02X%02X%02X%02X, %d, %02d/%02d/%04d %02d:%02d:%02d",
                   BA[b+1], BA[b+2], BA[b+3], BA[b+4], BA[b+5], BA[b], timeIn[0], timeIn[1], timeIn[2], timeIn[3], timeIn[4], timeIn[5]);
-               if(prnt) {serial.println(text);}
-               if(wrt && SDOK == 1) {dataFile.println(text);}
-               b = b + 10;
-            }  
-          } else {
-            b=1000;
+            //if(prnt) {serial.print(dMem, DEC); serial.print(" "); serial.println(text);}
+            if(prnt) {serial.println(text);}
+            if(wrt && SDOK == 1) {myFile.println(text);}
+            b = b + 10;
+            dMem = dMem + 10;
           }
-          
-        }
-        if(wrt && SDOK == 1) {
-          dataFile.close();      //close the file 
-          SDstop();
-        }
+          if( ((BA[b] > 9 && BA[b] < 129) || (BA[b] > 133)) && (dMem < memLoc) ) {
+            serial.println("data file alignment error. Store data and write all to new file");
+            serial.println("last dMem:"); serial.println(dMem, DEC);
+            serial.print(b, DEC); serial.print(" "); serial.print(BA[b], HEX); serial.print(" "); serial.print(BA[b+1], HEX); serial.print(" "); serial.println(BA[b+3], HEX);
+            showFlash(4224, 5500); 
         
-        b = b - 528;    //Pick up somewhere in the next page 
-        dMem = dMem + 528;  //Go to next page.
-      }
-  } else {
-    serial.println("No RFID data to write");
+            delay(500);
+            if(wrt && SDOK == 1) {myFile.close(); SDstop();}      //close the file 
+            dMem = memLoc + 1000; 
+            break;
+            return;
+          }   
+          //serial.print("dMem is now "); serial.println(dMem, DEC);  
+      } 
+      if(wrt && SDOK == 1) {
+        myFile.close();  //close the file 
+        //SDstop();
+      }     
   }
   serial.println();
 }
 
 
-void extractMemLog(uint8_t prntWrt) { 
-  //write all LOG data to SD card
- 
+void extractMemLog(uint8_t prntWrt, uint32_t flashStart) {
+//  serial.println("Write log mem...");
+//  serial.println();
+  
+  if(logLoc <= flashStart) {
+    serial.println("no log data to write");
+    return;
+  }
+
   bool prnt = bitRead(prntWrt, 0);
   bool wrt = bitRead(prntWrt, 1);
-  File dataFile;
+  char BA[500];           //define byte array to store (500 bytes)
+  uint32_t dMem = flashStart;  //counter for memory position
+  File myFile;
+
+    //Check if file on SD card exists. if not create it.
   if(wrt && SDOK == 1) {
-    fName[5] = 'L';                                      // change fName to Log file
-    serial.println("Writing all log data to SD card ");  // Message to user 
-  } 
-  if(logLoc > logStart) {     //proceed only if there are data - write nothing if there are no data
-    byte BA[533];             //define byte array to store a full page (528 bytes) plus 12 extra bytes
-    int b = 0;
-    uint32_t dMem = logStart;  
-    if(prnt) {
-      serial.println("Printing Flash Memory - Log...");
-      serial.println();
-    }
-    while(dMem < logLoc) {                 // read in full pages one at a time until last page is reached.
-       digitalWrite(LED_RFID, LOW);                 // Flash LED to indicate progress             
-       uint32_t pAddr = dMem/528;
-       if(wrt && SDOK == 1) {
-          serial.print("Transfering log data from page ");   // progress message 
-          serial.println(pAddr, DEC);
-       } 
-       pAddr = pAddr << 10;   
-       flashOn();
-       SPI.transfer(0x03);                         // opcode for low freq read
-       SPI.transfer((pAddr >> 16) & 0xFF);      // write most significant byte of Flash address
-       SPI.transfer((pAddr >> 8) & 0xFF);       // second address byte
-       SPI.transfer(0);                            // third address byte
-       
-       //SPI.transfer(BA, 528);                  // might work for reading in full page?? needs test.
-       
-       for (int n = 0; n < 532; n++) {           //read in 540 bytes - page crossover should be OK. 
-         BA[n] = SPI.transfer(0);                
-         //serial.print(BA[n]);
-       }    
-       digitalWrite(LED_RFID, HIGH);
-       flashOff();
-
-       if(wrt && SDOK == 1) {
-          SDstart();
-          dataFile = SD.open(fName, FILE_WRITE);
-       }
-       
-       while(b < 528) {
-          if(BA[b] != 0xFF) {
-            getLogMessage(BA[b]); //Log message gets loaded into logMess
-            //serial.println("process log line");
-            unixTime.b1 = BA[b+1]; unixTime.b2 = BA[b+2]; unixTime.b3 = BA[b+3]; unixTime.b4 = BA[b+4];
-            convertUnix(unixTime.unixLong);  // covert unix time. Time values get stored in array timeIn, bytes 0 through 5.
-            static char text[20]; 
-            sprintf(text, ", %02d/%02d/%04d %02d:%02d:%02d", timeIn[0], timeIn[1], timeIn[2], timeIn[3], timeIn[4], timeIn[5]);
-            if(prnt){
-              serial.print(logMess);
-              serial.println(text);
-            }
-            if(wrt && SDOK == 1){
-              dataFile.print(logMess);
-              dataFile.println(text);
-            }
-            b = b + 5;
-          } else {
-            b=1000;
-          }  
-        }
-        if(wrt && SDOK == 1) {
-          dataFile.close();      //close the file 
-          SDstop();
-        }
-        b = b - 528;    //Pick up somewhere in the next page 
-        dMem = dMem + 528;  //Go to next page.
-      //        serial.println();
-      //        serial.print("next page ");
-      //        serial.println(dMem, DEC);
-      //        serial.println();
-      }
-    } else {
-    serial.println("No Log data to write");
+    SDstart();
+    if(!SD.exists(logFile)) {
+      serial.print("Creating new log file on SD card: ");
+      serial.println(logFile);
+      myFile = SD.open(logFile, FILE_WRITE);
+      delay(10);
+      myFile.close();
+    } 
+    //else {
+    //  serial.println("file on SD card found");
+    //}
+    //SDstop();
   }
-  fName[5] = 'D'; 
+
+  if(!SD.exists(logFile)) {
+    serial.println("log file not created!!");
+  }
+
+  serial.print("transferring data from "); serial.print(flashStart, DEC); serial.print(" to "); serial.println(logLoc, DEC);
+  while(dMem < logLoc) {                 // read batches of flash data until end of data is reached.   
+     //showFlash(dMem, dMem+500);
+     digitalWrite(LED_RFID, LOW);   // Flash LED to indicate progress             
+     readFlash(dMem, BA, 500);       // Read in batch of data
+
+     digitalWrite(LED_RFID, HIGH);  // Flash LED to indicate progress 
+     flashOff();                    // Make sure flash chip is off 
+     //serial.print("Flash batch read in starting at "); serial.println(dMem, DEC);
+     uint16_t b = 0; 
+
+          //Write lines to SD card and/or serial
+     if(wrt && (SDOK == 1)) {  //open SD card file if needed
+         myFile = SD.open(logFile, FILE_WRITE);  //Open for appending new data to file
+     } 
+     
+     while((b < 490) & (dMem < logLoc)) {       //Don't go through end of array, in case of cutting off data lines.
+        //serial.print("first byte of line at position "); serial.print(b, DEC); serial.print(" is "); serial.println(BA[b], HEX);
+        if(BA[b] != 0xFF) {
+          getLogMessage(BA[b]); //Log message gets loaded into logMess
+          unixTime.b1 = BA[b+1]; unixTime.b2 = BA[b+2]; unixTime.b3 = BA[b+3]; unixTime.b4 = BA[b+4];
+          convertUnix(unixTime.unixLong);  // covert unix time. Time values get stored in array timeIn, bytes 0 through 5.
+          static char text[20]; 
+          sprintf(text, ", %02d/%02d/%04d %02d:%02d:%02d", timeIn[0], timeIn[1], timeIn[2], timeIn[3], timeIn[4], timeIn[5]);
+          if(prnt){
+             serial.print(logMess);
+             serial.println(text);
+          }
+          if(wrt && SDOK == 1){
+             myFile.print(logMess);
+             myFile.println(text);
+          }
+          b = b + 5;
+          dMem = dMem + 5;
+        } else {
+          break; 
+        }
+       //serial.print("dMem is now "); serial.println(dMem, DEC);  
+      } 
+      if(wrt && SDOK == 1) {
+        myFile.close();  //close the file 
+        //SDstop();
+      }     
+  }
   serial.println();
+  return;
 }
 
 
-void writeMemRFID() {
-  //write all RFID data to SD card
-  serial.println("Writing data SD card.");
-  fName[0] = deviceID[0]; fName[1]= deviceID[1]; fName[2]= deviceID[2]; fName[3]= deviceID[3];
-  fName[4]='_'; fName[5]='D'; fName[6]='0'; fName[7]='0'; fName[8]='.'; fName[9]='T'; fName[10]='X';
-  fName[11]='T'; fName[12]='\0';
-  SDstart();
-  while (SD.exists(fName)) {
-    //serial.print("File Exists!!  ");   // Message to user
-    //serial.println(fName);
-    fName[7] = fName[7] + 1;
-    if(fName[7] > 57) {
-      fName[7]=48;
-      fName[6]=fName[6]+1;
-      if(fName[6] > 57){
-         fName[6]=65;
-      }
-      if(fName[6] > 90){
-         fName[6]=48;
-         fName[4]='X';
-      }
-    }
-  } 
-  File dataFile = SD.open(fName, FILE_WRITE);
-  if (dataFile) {
-     //serial.print("Writing data to new file  ");
-     //serial.println(fName);
-     dataFile.close();
-     SDstop();
-  }
-//     serial.print("Writing from memLoc  ");
-//     serial.print(datStart);
-//     serial.print(" to ");
-//     serial.println(memLoc);
 
-  if(memLoc > datStart) {     //proceed only if there are data - write nothing if there are no data
-    byte BA[540];             //define byte array to store a full page (528 bytes) plus 12 extra bytes
-    int b = 0;
-    uint32_t dMem = datStart;  
-    while(dMem < memLoc) {                 // read in full pages one at a time until last page is reached.
-       digitalWrite(LED_RFID, LOW);                 // Flash LED to indicate progress             
-       serial.print("Transfering RFID data from page ");   // progress message  
-       uint32_t pAddr = dMem/528;
-       serial.println(pAddr, DEC);
-       pAddr = pAddr << 10;   
-        //     Make the page address a full address with byte address as zero.
-        //     serial.print("current flash Address ");      // progress message  
-        //     serial.println(fAddress, DEC);
-        //     serial.print("last flash Address page ");         // progress message  
-        //     serial.println(flashAddr>>10, DEC);
-       flashOn();
-       SPI.transfer(0x03);                         // opcode for low freq read
-       SPI.transfer((pAddr >> 16) & 0xFF);      // write most significant byte of Flash address
-       SPI.transfer((pAddr >> 8) & 0xFF);       // second address byte
-       SPI.transfer(0);                            // third address byte
-       
-       //SPI.transfer(BA, 528);                  // might work for reading in full page?? needs test.
-       
-       for (int n = 0; n < 539; n++) {           //read in 540 bytes - page crossover should be OK. 
-         BA[n] = SPI.transfer(0);                
-         //serial.print(BA[n]);
-       }    
-       digitalWrite(LED_RFID, HIGH);
-       flashOff();
+//void extractMemLogOld(uint8_t prntWrt) { 
+//  //write LOG data to SD card
+// 
+//  bool prnt = bitRead(prntWrt, 0);
+//  bool wrt = bitRead(prntWrt, 1);
+//  File dataFile;
+//  if(wrt && SDOK == 1) {
+//    fName[5] = 'L';                                      // change fName to Log file
+//    serial.println("Writing log data to SD card ");  // Message to user 
+//  } 
+//  if(logLoc > logStart) {     //proceed only if there are data - write nothing if there are no data
+//    byte BA[533];             //define byte array to store a full page (528 bytes) plus 12 extra bytes
+//    int b = 0;
+//    uint32_t dMem = logStart;  
+//    if(prnt) {
+//      serial.println("Printing Flash Memory - Log...");
+//      serial.println();
+//    }
+//    while(dMem < logLoc) {                 // read in full pages one at a time until last page is reached.
+//       digitalWrite(LED_RFID, LOW);                 // Flash LED to indicate progress             
+//       uint32_t pAddr = dMem/528;
+//       if(wrt && SDOK == 1) {
+//          serial.print("Transfering log data from page ");   // progress message 
+//          serial.println(pAddr, DEC);
+//       } 
+//       pAddr = pAddr << 10;   
+//       flashOn();
+//       SPI.transfer(0x03);                         // opcode for low freq read
+//       SPI.transfer((pAddr >> 16) & 0xFF);      // write most significant byte of Flash address
+//       SPI.transfer((pAddr >> 8) & 0xFF);       // second address byte
+//       SPI.transfer(0);                            // third address byte
+//       
+//       //SPI.transfer(BA, 528);                  // might work for reading in full page?? needs test.
+//       
+//       for (int n = 0; n < 532; n++) {           //read in 540 bytes - page crossover should be OK. 
+//         BA[n] = SPI.transfer(0);                
+//         //serial.print(BA[n]);
+//       }    
+//       digitalWrite(LED_RFID, HIGH);
+//       flashOff();
+//
+//       if(wrt && SDOK == 1) {
+//          SDstart();
+//          dataFile = SD.open(fName, FILE_WRITE);
+//       }
+//       
+//       while(b < 528) {
+//          if(BA[b] != 0xFF) {
+//            getLogMessage(BA[b]); //Log message gets loaded into logMess
+//            //serial.println("process log line");
+//            unixTime.b1 = BA[b+1]; unixTime.b2 = BA[b+2]; unixTime.b3 = BA[b+3]; unixTime.b4 = BA[b+4];
+//            convertUnix(unixTime.unixLong);  // covert unix time. Time values get stored in array timeIn, bytes 0 through 5.
+//            static char text[20]; 
+//            sprintf(text, ", %02d/%02d/%04d %02d:%02d:%02d", timeIn[0], timeIn[1], timeIn[2], timeIn[3], timeIn[4], timeIn[5]);
+//            if(prnt){
+//              serial.print(logMess);
+//              serial.println(text);
+//            }
+//            if(wrt && SDOK == 1){
+//              dataFile.print(logMess);
+//              dataFile.println(text);
+//            }
+//            b = b + 5;
+//          } else {
+//            b=1000;
+//          }  
+//        }
+//        if(wrt && SDOK == 1) {
+//          dataFile.close();      //close the file 
+//          SDstop();
+//        }
+//        b = b - 528;    //Pick up somewhere in the next page 
+//        dMem = dMem + 528;  //Go to next page.
+//      //        serial.println();
+//      //        serial.print("next page ");
+//      //        serial.println(dMem, DEC);
+//      //        serial.println();
+//      }
+//    } else {
+//    serial.println("No Log data to write");
+//  }
+//  fName[5] = 'D'; 
+//  serial.println();
+//}
+//
 
-       SDstart();
-       File dataFile = SD.open(fName, FILE_WRITE);
-       while(b < 528) {
-          if(BA[b] != 0xFF) {
-            //serial.print("Writing line to SD ");
-            //serial.println(b, DEC);
-            //serial.println(BA[b], BIN);
-            if(BA[b] > 100) {
-               //serial.println("process ISO data line");
-               unixTime.b1 = BA[b+8]; unixTime.b2 = BA[b+9]; unixTime.b3 = BA[b+10]; unixTime.b4 = BA[b+11];
-               convertUnix(unixTime.unixLong);  // covert unix time. Time values get stored in array timeIn, bytes 0 through 5.
-               static char text[41]; 
-               countryCode = (BA[b+6]<<2) + (BA[b+5]>>6);
-               sprintf(text, "%03X.%02X%02X%02X%02X%02X, %03d, %d, %02d/%02d/%04d %02d:%02d:%02d",
-                 countryCode, (BA[b+5] & 0b00111111), BA[b+4], BA[b+3], BA[b+2], BA[b+1], BA[b+7], (BA[b] & 0x0F),  
-                 timeIn[0], timeIn[1], timeIn[2], timeIn[3], timeIn[4], timeIn[5]);
-               //serial.println(text);
-               dataFile.println(text);
-               b = b + 12;
-            } else {
-               //serial.println("process EM4100 tag line");
-               unixTime.b1 = BA[b+6]; unixTime.b2 = BA[b+7]; unixTime.b3 = BA[b+8]; unixTime.b4 = BA[b+9];
-               static char text[41];
-               sprintf(text, "%02X%02X%02X%02X%02X, %d, %02d/%02d/%04d %02d:%02d:%02d",
-                  BA[b+1], BA[b+2], BA[b+3], BA[b+4], BA[b+5], BA[b], timeIn[0], timeIn[1], timeIn[2], timeIn[3], timeIn[4], timeIn[5]);
-               //serial.println(text);
-               dataFile.println(text);
-               b = b + 10;
-            }  
-          } else {
-            b=1000;
-          }
-          
-        }
-        dataFile.close();      //close the file 
-        SDstop();
-        b = b - 528;    //Pick up somewhere in the next page 
-        dMem = dMem + 528;  //Go to next page.
-        // serial.println();
-        // serial.print("next page ");
-        // serial.println(dMem, DEC);
-        // serial.println();
-      }
-  } else {
-    serial.println("No data to write");
-  }
-}
-
-uint32_t getMemLoc(uint32_t startMem, uint32_t endMem){ //startMem = beginning of first page; endMem = beginning of last page.
-    serial.println("Getting memLoc");
-    char ccc[5] = {0,0,0,0,0}; 
-    uint32_t mLoc = startMem; //Start with specified memory location
-    startMem = startMem + 523;  //look at last 5 bytes on page
-    while(startMem <= endMem){                               //This loop provides the last page address
-       readFlash(startMem, ccc, 5);
-       if((ccc[0]==0xFF) && (ccc[1]==0xFF) && (ccc[2]==0xFF) && (ccc[3]==0xFF) && (ccc[4]==0xFF)) {
-          break;
-          } else {
-          startMem = startMem + 528;
-       }  
-    }
-    uint32_t endLoc = startMem + 80; //Define uppler limit for search
-    startMem = startMem-523; //Go back to beginning of page
-    uint8_t done = 0;
-      while((startMem < endLoc) && done == 0){
-       readFlash(startMem, cArray1, 64);
-       uint8_t i = 0;
-       while(i < 64){
-        if(cArray1[i] == 0xFF) {
-          if((cArray1[i+1] == 0xFF) && (cArray1[i+2] == 0xFF) && (cArray1[i+3] == 0xFF) && (cArray1[i+4] == 0xFF)){
-            //serial.println("end found");
-            done = 1;
-            startMem = startMem+i;
-            break;
-          }
-        }
-        i++;
-       }
-       if(done==0) {startMem=startMem+64;}
-    }
-    return startMem;
-}
 
 ////////////SD CARD FUNCTIONS////////////////////
 
 //Startup routine for the SD card
 bool SDstart() {                 // Startup routine for the SD card
-  digitalWrite(SDselect, HIGH);  // Activate the SD card if necessary
+  digitalWrite(SDselect, HIGH);  // Deactivate the SD card if necessary
   digitalWrite(FlashCS, HIGH);   // Deactivate flash chip if necessary
   pinMode(SDon, OUTPUT);         // Make sure the SD power pin is an output
   digitalWrite(SDon, LOW);       // Power to the SD card
@@ -1262,22 +1537,54 @@ void SDstop() {                 // Stop routine for the SD card
   digitalWrite(SDon, HIGH);     // power off the SD card
 }
 
-bool writeSDLine(uint8_t mess, char *BA) {
+uint32_t getMemLoc(uint32_t startMem, uint32_t endMem){ //startMem = beginning of first page; endMem = beginning of last page.
+    //serial.println("Getting memLoc");
+    char ccc[5] = {0,0,0,0,0};
+    char ff[533]; //huge array for entire page plus a few at the end. 
+    uint32_t mLoc = startMem; //Start with specified memory location
+    startMem = startMem + 527;  //look at last byte on first memory page
+
+    while(startMem <= endMem){  //This loop provides the last page address
+       readFlash(startMem, ccc, 5);
+       if((ccc[0]==0xFF) && (ccc[1]==0xFF) && (ccc[2]==0xFF) && (ccc[3]==0xFF) && (ccc[4]==0xFF)) {
+          break;
+          } else {
+          startMem = startMem + 528;   //Data found at end of page. try the next one
+       }  
+    }
+    //uint32_t endLoc = startMem + 80; //Define uppler limit for search
+    startMem = startMem-527; //Go back to beginning of page
+    //serial.print("Byte search starting at "); serial.println(startMem, DEC);
+    readFlash(startMem, ff, 533);  //read in entire page plus a few bytes
+    for(uint16_t i = 0; i < 528; i++) { //
+      if(ff[i] == 0xFF) {
+        if((ff[i+1]==0xFF) && (ff[i+2]==0xFF) && (ff[i+3]==0xFF) &(ff[i+4]==0xFF)) { //Check for a string of empty bytes.
+          //serial.print("end found at "); 
+          startMem = startMem+i;
+          //serial.println(startMem, DEC);
+          return startMem;
+        }
+      }
+    }
+    serial.print("Problem finding memory location");
+    return 4224;
+}
+
+bool writeSDLine(String fName, uint8_t mess, char *BA) {
   bool success = 0;       // valriable to indicate success of operation
-  String sT;              // Used for date/time string (replace with array at some point?)
-  fName[5] = 'D';         // set default fName to data file as opposed to log file
-  if(mess !=0) {          // If the message indicator is not zero, then we have a log line to write
-    sT = showTime();      // get date/time
-    getLogMessage(mess);  // extract the text of the log message
-    fName[5] = 'L';       // set fName to log file
-  }
   SDstart();                                        // start up the SD card
   File dFile = SD.open(fName, FILE_WRITE);          // Open the file
   if (dFile) {                                      // If the file is opened successfully...
      if(mess !=0) {                                 // write if it is a log file
+        getLogMessage(mess); //Log message gets loaded into logMess
+        unixTime.b1 = BA[1]; unixTime.b2 = BA[2]; unixTime.b3 = BA[3]; unixTime.b4 = BA[4];
+        convertUnix(unixTime.unixLong);  // covert unix time. Time values get stored in array timeIn, bytes 0 through 5.
+        static char text[22]; 
+        sprintf(text, ", %02d/%02d/%04d %02d:%02d:%02d", timeIn[0], timeIn[1], timeIn[2], timeIn[3], timeIn[4], timeIn[5]);
+        text[21] = '\0';
+        
         dFile.print(logMess);  // write log message
-        dFile.print(", ");      // add a space
-        dFile.println(sT);     // write date/time and new line      
+        dFile.println(text);     // write date/time and new line      
       }
       if(mess == 0) {   
         dFile.println(BA);
@@ -1286,7 +1593,7 @@ bool writeSDLine(uint8_t mess, char *BA) {
       dFile.close();                                       // ...close the file...
   }
   SDstop();                                              // Disable SD
-  fName[5] = 'D';                                        // Make sure fName is set to the RFID data file
+  //fName[5] = 'D';                                        // Make sure fName is set to the RFID data file
   return success;                                        // Indicates success (1) or failure (0)
 }
 
