@@ -24,35 +24,47 @@
 
   LIBRARIES:
   The RV3129 library is accessible on github here:
-  https://github.com/OUIDEAS/RV-3129_Arduino_Library.git
+  https://github.com/Eli-S-Bridge/RV-3129_Arduino_Library
+
+  Don't use the original RV3129 library - it has a bug and the repository owner
+  seems to have no interest in fixing it.   
 
   FLASH MEMORY STRUCTURE:
   Adesto® AT45DB321E
   34,603,008 bits of memory are organized as 8,192 pages of 528 bytes each.
-  23-bit address sequence - The first 13 bits (PA12 - PA0) specify the page.
-  The last 10 bits (BA9 - BA0) specify the byte address within the page.
+  there is a 23-bit address sequence:
+    The first 13 bits (PA12 - PA0) specify the page.
+    The last 10 bits (BA9 - BA0) specify the byte address within the page.
   Data can be written/erased as pages, blocks (8 pages) or sectors (usually 128 pages).
-  First sector = pages 0-7; others are much larger
+  The First sector is pages 0-7; others are much larger
+  
   Pages count up as 0x00000000, 0x00000400, 0x00000800, 0x00000C00, 0x00001000, 0x00001400, 0x00001800, 0x00001C00, 0x00002000
                     page 0      page 1      page 2      page 3      page 4      page 5      page 6      page  7     page 8
   To get page address, take just the page number (1, 2, 3) and shft it 10 bits left.                   
   
-  Page 0 is reserved for parameters and counters (Addresses 0x00000400 to ??
+  Page 0 is reserved for parameters and counters:
     byte 3 - (0x403) Set to 0xAA once the memory address counter is intialized. (important mainly for the very first initialization process with a completely blank Flash memory)
     bytes 4-7 - (0x404-0x407) next four bytes are for the reader ID charaters
     byte 13 = Logging mode - log to SD in real time or just use Flash
-  Pages 1-7 are reserved for RFID tag codes. (sector 1a is pages 0-7)
-  Pages 8 (0x00 00 20 00) to 127 (all of sector 1b) are for logging and error codes.
-  Remaining pages (and sectors) are for RFID data. First address for data storage is page 128 (0x00 02 00 00)
+  
+  Pages 1-7 are reserved for logging information (start times, wake/sleep cycles, etc).
+      log events are coded as follows:
+       1 - "Logging_started"
+       2 - "Going_to_sleep "
+       3 - "Wake_from_sleep" 
+  Pages 8 and on are for RFID data. First address for data storage is page 8
 
-  New memory access system (Mar 2023). Memory location (memLoc) counts up from zero. First memory location for RFID 
-  is 4224 (page 8 byte 0) or whatever is specified in datStart. Translation of memLoc to flash address as well as crossing page boundaries 
-  is done in readFlash and writeFlash functions. These functions must recieve arrays, but can deal with
+  New memory access system (Mar 2023). Memory location (global variable memLoc) counts up from zero. First memory location for RFID 
+  is 4224 (page 8 byte 0) or whatever is specified in global variable datStart. Translation of memLoc to flash address as well as crossing page boundaries 
+  is done in readFlash() and writeFlash() functions. These functions must recieve arrays, but can deal with
   single bytes by setting nchar to 1.
 
-  RFID data lines are stored in a manner that prevents having 0xFF at the beginning or end of a line
-  Each line begins with a byte that indicates the antenna number (usually 1 or 2) and the tag type (1=EM4100, 2=ISO11784/5)
-  Then there is a VARIABLE NUMBER OF BYTES for the RFID code (5 bytes for EM4100, 8 bytes for ISO)
+  RFID data lines are stored in flash memory in a manner that prevents having 0xFF at the beginning of a line
+  Each line begins with a byte that indicates the antenna number in the least significant bits
+  and the tag type indicated by a flag on the MSB (0 for EM4100, 1 for ISO11784/5),
+  So binary 10000010 would indicate an ISO tag read on antenna 2.   
+  Then there is a VARIABLE NUMBER OF BYTES for the RFID code (5 bytes for EM4100, 6 bytes for ISO).
+  ISO tags also include a byte for temperature data (a 0 is stored if the tag does not do temperature).
   Last is the unix timestamp. To ensure that the line does not end with 0xFF we order the bytes for
   the timestamp to make the most significant byte last in the sequence. 
   So, it goes unixTime.b1, unixTime.b2, unixTime.b3, unixTime.b4.
@@ -60,23 +72,21 @@
 Nov 8, 2019 - Added Memory address lookup - address pointer no longer used. 
 Nov 10, 2019 - Added dual logging modes. 
 Nov 10, 2019 - Fixed bug in sleepTimer function that stopped the clock.
-Dec 15, 2019 - Changed default mode to no-SD, added LED flash when logging starts
+Dec 15, 2019 - Changed default mode to F (no-SD card used), added LED flash when logging starts
 July 2022 - revised memory structure to allow for more tag storage.
           - revised memory to compress times using unix format 
           - set up serial input code to ignore line feeds and returns
           - revised data transfer to generate old and new files. 
 
- Mar 2023 - simplified Flash memory writing - one write command and one read command that automatically writes across pages.
+Mar 2023  - simplified Flash memory writing - one write command and one read command that automatically writes across pages.
           - Added ISO11784/5 tag reading capability and temperature tags!!!! set global ISO variable to  1 for ISO tags.
           - Progressed toward elimination of string variables (still some strings used with the real time clock)
           - revamped SD card storage functions
           - enabled log files for both SD and Flash logging modes
           - Revamped file storage. New file created for each data transfer.
           
- log events are coded as follows
- 1 - "Logging_started"
- 2 - "Going_to_sleep "
- 3 - "Wake_from_sleep" 
+Sept 2023 - New scheme for transferring data to SD. The last line in the SD data
+            are compared with lines in the flash to avoid wiring duplicated data. 
 
  TO DO: Build in clock error detection??
  
@@ -473,10 +483,10 @@ void blinkLED(uint8_t ledPin, uint8_t repeats, uint16_t duration) { //Flash an L
   
       // Ask the user for instruction and display the options
       serial.println("What to do? (input capital letters)");
-      serial.println("  C = set clock");
+      serial.println("  C = Set clock");
       serial.println("  B = Display backup memory and log history");
   //    serial.println("  D = Display logging history");
-      serial.println("  E = Erase (reset) backup memory");
+      serial.println("  E = Erase (reset) flash memory");
       serial.println("  I = Set device ID");
       serial.println("  M = Change logging mode");
       serial.println("  W = Write ALL flash data to SD card (includes duplicates)");
