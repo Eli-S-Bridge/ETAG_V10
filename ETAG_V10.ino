@@ -199,8 +199,8 @@ char flashData[12];
 // ********************CONSTANTS (SET UP LOGGING PARAMETERS HERE!!)*******************************
 const byte checkTime = 30;                          // How long in milliseconds to check to see if a tag is present (Tag is only partially read during this time -- This is just a quick way of detirmining if a tag is present or not
 const unsigned int pollTime1 = 200;                 // How long in milliseconds to try to read a tag if a tag was initially detected (applies to both RF circuits, but that can be changed)
-const unsigned int delayTime = 8;                   // Minimim time in seconds between recording the same tag twice in a row (only applies to data logging--other operations are unaffected)
-const unsigned long pauseTime = 100;                // CRITICAL - This determines how long in milliseconds to wait between reading attempts. Make this wait time as long as you can and still maintain functionality (more pauseTime = more power saved)
+const unsigned int delayTime = 1;                   // Minimim time in seconds between recording the same tag twice in a row (only applies to data logging--other operations are unaffected)
+const unsigned long pauseTime = 500;                // CRITICAL - This determines how long in milliseconds to wait between reading attempts. Make this wait time as long as you can and still maintain functionality (more pauseTime = more power saved)
 uint16_t pauseCountDown = pauseTime / 31.25;        // Calculate pauseTime for 32 hertz timer
 byte pauseRemainder = ((100*pauseTime)%3125)/100;   // Calculate a delay if the pause period must be accurate
 //byte pauseRemainder = 0 ;                         // ...or set it to zero if accuracy does not matter
@@ -1298,7 +1298,7 @@ void extractMemRFID(uint8_t prntWrt, uint32_t flashStart) {  //Takes data from F
      
      while((b < 480) & (dMem < memLoc)) {       //Don't go through end of array, in case of cutting off data lines.
         //serial.print("first byte of line at position "); serial.print(b, DEC); serial.print(" is "); serial.println(BA[b], HEX);
-        if((BA[b] == 129) | (BA[b] == 130)) {
+        if((BA[b] == 129) | (BA[b] == 130)) { //This determines whether you have an ISO tag or not
             //serial.println("Writing ISO line");
             unixTime.b1 = BA[b+8]; unixTime.b2 = BA[b+9]; unixTime.b3 = BA[b+10]; unixTime.b4 = BA[b+11];
             convertUnix(unixTime.unixLong);  // convert unix time. Time values get stored in array timeIn, bytes 0 through 5.
@@ -1431,94 +1431,6 @@ void extractMemLog(uint8_t prntWrt, uint32_t flashStart) {
   serial.println();
   return;
 }
-
-
-
-//void extractMemLogOld(uint8_t prntWrt) { 
-//  //write LOG data to SD card
-// 
-//  bool prnt = bitRead(prntWrt, 0);
-//  bool wrt = bitRead(prntWrt, 1);
-//  File dataFile;
-//  if(wrt && SDOK == 1) {
-//    fName[5] = 'L';                                      // change fName to Log file
-//    serial.println("Writing log data to SD card ");  // Message to user 
-//  } 
-//  if(logLoc > logStart) {     //proceed only if there are data - write nothing if there are no data
-//    byte BA[533];             //define byte array to store a full page (528 bytes) plus 12 extra bytes
-//    int b = 0;
-//    uint32_t dMem = logStart;  
-//    if(prnt) {
-//      serial.println("Printing Flash Memory - Log...");
-//      serial.println();
-//    }
-//    while(dMem < logLoc) {                 // read in full pages one at a time until last page is reached.
-//       digitalWrite(LED_RFID, LOW);                 // Flash LED to indicate progress             
-//       uint32_t pAddr = dMem/528;
-//       if(wrt && SDOK == 1) {
-//          serial.print("Transfering log data from page ");   // progress message 
-//          serial.println(pAddr, DEC);
-//       } 
-//       pAddr = pAddr << 10;   
-//       flashOn();
-//       SPI.transfer(0x03);                         // opcode for low freq read
-//       SPI.transfer((pAddr >> 16) & 0xFF);      // write most significant byte of Flash address
-//       SPI.transfer((pAddr >> 8) & 0xFF);       // second address byte
-//       SPI.transfer(0);                            // third address byte
-//       
-//       //SPI.transfer(BA, 528);                  // might work for reading in full page?? needs test.
-//       
-//       for (int n = 0; n < 532; n++) {           //read in 540 bytes - page crossover should be OK. 
-//         BA[n] = SPI.transfer(0);                
-//         //serial.print(BA[n]);
-//       }    
-//       digitalWrite(LED_RFID, HIGH);
-//       flashOff();
-//
-//       if(wrt && SDOK == 1) {
-//          SDstart();
-//          dataFile = SD.open(fName, FILE_WRITE);
-//       }
-//       
-//       while(b < 528) {
-//          if(BA[b] != 0xFF) {
-//            getLogMessage(BA[b]); //Log message gets loaded into logMess
-//            //serial.println("process log line");
-//            unixTime.b1 = BA[b+1]; unixTime.b2 = BA[b+2]; unixTime.b3 = BA[b+3]; unixTime.b4 = BA[b+4];
-//            convertUnix(unixTime.unixLong);  // covert unix time. Time values get stored in array timeIn, bytes 0 through 5.
-//            static char text[20]; 
-//            sprintf(text, ", %02d/%02d/%04d %02d:%02d:%02d", timeIn[0], timeIn[1], timeIn[2], timeIn[3], timeIn[4], timeIn[5]);
-//            if(prnt){
-//              serial.print(logMess);
-//              serial.println(text);
-//            }
-//            if(wrt && SDOK == 1){
-//              dataFile.print(logMess);
-//              dataFile.println(text);
-//            }
-//            b = b + 5;
-//          } else {
-//            b=1000;
-//          }  
-//        }
-//        if(wrt && SDOK == 1) {
-//          dataFile.close();      //close the file 
-//          SDstop();
-//        }
-//        b = b - 528;    //Pick up somewhere in the next page 
-//        dMem = dMem + 528;  //Go to next page.
-//      //        serial.println();
-//      //        serial.print("next page ");
-//      //        serial.println(dMem, DEC);
-//      //        serial.println();
-//      }
-//    } else {
-//    serial.println("No Log data to write");
-//  }
-//  fName[5] = 'D'; 
-//  serial.println();
-//}
-//
 
 
 ////////////SD CARD FUNCTIONS////////////////////
