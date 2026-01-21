@@ -1,12 +1,12 @@
 /*
   Data logging sketch for the ETAG RFID Reader
-  ETAG READER Version 10.0
+  ETAG READER Version 10.1
   PROCESSOR SAMD21JXXX
   USE BOARD DEFINITION: ETAG RFID V2 D21
   Code by:
    Jay Wilhelm
    Tho Trinh
-   Eli Bridge
+   Eli Bridge 
    Alexander Moreno
    David Mitchell
 
@@ -121,7 +121,7 @@ RV3129 rtc;   //Initialize an instance for the RV3129 real time clock library.
 uint32_t datStart = 4224;      //initial RFID tag memory address
 uint32_t logStart = 528;       //initial log memory address
 
-uint8_t ISO = 0;               //set to 1 to read ISO11874/5 tags, 0 = EM4100 tags
+uint8_t ISO = 1;               //set to 1 to read ISO11874/5 tags, 0 = EM4100 tags
 
 char deviceID[5] = "RFID";            // User defined name of the device                 
 String deviceIDstr;                   // String verion of device name.
@@ -197,18 +197,18 @@ char cArray2[64];                     // Global general purpose character array 
 char flashData[12];
 
 // ********************CONSTANTS (SET UP LOGGING PARAMETERS HERE!!)*******************************
-const byte checkTime = 30;                          // How long in milliseconds to check to see if a tag is present (Tag is only partially read during this time -- This is just a quick way of detirmining if a tag is present or not
+const byte checkTime = 60;                          // How long in milliseconds to check to see if a tag is present (Tag is only partially read during this time -- This is just a quick way of detirmining if a tag is present or not
 const unsigned int pollTime1 = 200;                 // How long in milliseconds to try to read a tag if a tag was initially detected (applies to both RF circuits, but that can be changed)
-const unsigned int delayTime = 1;                   // Minimim time in seconds between recording the same tag twice in a row (only applies to data logging--other operations are unaffected)
-const unsigned long pauseTime = 500;                // CRITICAL - This determines how long in milliseconds to wait between reading attempts. Make this wait time as long as you can and still maintain functionality (more pauseTime = more power saved)
+const unsigned int delayTime = 8;                   // Minimim time in seconds between recording the same tag twice in a row (only applies to data logging--other operations are unaffected)
+const unsigned long pauseTime = 200;                // CRITICAL - This determines how long in milliseconds to wait between reading attempts. Make this wait time as long as you can and still maintain functionality (more pauseTime = more power saved)
 uint16_t pauseCountDown = pauseTime / 31.25;        // Calculate pauseTime for 32 hertz timer
 byte pauseRemainder = ((100*pauseTime)%3125)/100;   // Calculate a delay if the pause period must be accurate
 //byte pauseRemainder = 0 ;                         // ...or set it to zero if accuracy does not matter
 
-const byte slpH = 99;                            // When to go to sleep at night - hour
-const byte slpM = 00;                            // When to go to sleep at night - minute
-const byte wakH = 99;                            // When to wake up in the morning - hour
-const byte wakM = 00;                            // When to wake up in the morning - minute
+const byte slpH = 11;                            // When to go to sleep at night - hour
+const byte slpM = 12;                            // When to go to sleep at night - minute
+const byte wakH = 11;                            // When to wake up in the morning - hour
+const byte wakM = 13;                            // When to wake up in the morning - minute
 const unsigned int slpTime = slpH * 100 + slpM;  // Combined hours and minutes for sleep time
 const unsigned int wakTime = wakH * 100 + wakM;  // Combined hours and minutes for wake time
 
@@ -220,7 +220,7 @@ const unsigned int wakTime = wakH * 100 + wakM;  // Combined hours and minutes f
    serial data, but tag reading and data storage will still work.
 */
 unsigned int cycleCount = 0;          // counts read cycles
-unsigned int stopCycleCount = 500;     // How many read cycles to maintain serial comminications
+unsigned int stopCycleCount = 20;     // How many read cycles to maintain serial comminications
 bool Debug = 1;                       // Use to stop serial messages once sleep mode is used.
 byte SDOK = 1;
 char logMode;
@@ -427,12 +427,12 @@ void loop() { // Main code is here, it loops forever:
 //////////Pause//////////////////Pause//////////
 //After each read attempt execute a pause using either a simple delay or low power sleep mode.
 
-  if(cycleCount < stopCycleCount){   // Pause between read attempts with delay or a sleep timer 
+  if(cycleCount < stopCycleCount) {   // Pause between read attempts with delay or a sleep timer. In ISO mode, do not sleep. 
     if(serial.available()) {
       byte C1 = serial.read();                          // read input from the user
       if(C1 == 'm') {                                     // Do nothing with character that are not numbers or letter (ignore line returns and such)
       doMenu();
-    }
+      }
     }
     delay(pauseTime);                // Use a simple delay and keep USB communication working
     cycleCount++ ;                   // Advance the counter                         
@@ -1522,22 +1522,51 @@ bool writeSDLine(String fName, uint8_t mess, char *BA) {
 ///////Sleep Function/////////////Sleep Function/////////
 
 void lpSleep() {
+  serial.end();
   digitalWrite(MOTR, HIGH) ;                         // Must be set high to get low power working - don't know why
   shutDownRFID();                                    // Turn off both RFID circuits
   attachInterrupt(INT1, ISR, FALLING);               // Set up interrupt to detect high to low transition on interrupt pin
-  GCLK->CLKCTRL.reg = GCLK_CLKCTRL_ID(GCM_EIC) |     // Configure EIC to use GCLK1 which uses XOSC32K
-                      GCLK_CLKCTRL_GEN_GCLK1 |       // This has to be done after the first call to attachInterrupt()
-                      GCLK_CLKCTRL_CLKEN;
-  USB->DEVICE.CTRLA.reg &= ~USB_CTRLA_ENABLE;        // disable USB
-  SysTick->CTRL  &= ~SysTick_CTRL_ENABLE_Msk;        // disable ms clock
+  
+  // enable EIC clock (External Interrupt Controller)
+  GCLK->CLKCTRL.bit.CLKEN = 0; //disable GCLK module
+  while (GCLK->STATUS.bit.SYNCBUSY); //Wait for command to complete
 
+  //EIC clock switched on GCLK6
+  GCLK->CLKCTRL.reg = (uint16_t) (GCLK_CLKCTRL_CLKEN | GCLK_CLKCTRL_GEN_GCLK6 | GCLK_CLKCTRL_ID( GCM_EIC ));
+  while (GCLK->STATUS.bit.SYNCBUSY);
+  
+  //source for GCLK6 is OSCULP32K
+  GCLK->GENCTRL.reg = (GCLK_GENCTRL_GENEN | GCLK_GENCTRL_SRC_OSCULP32K | GCLK_GENCTRL_ID(6));  
+  while (GCLK->STATUS.reg & GCLK_STATUS_SYNCBUSY);
+
+  //GCLK6 run standby
+  GCLK->GENCTRL.bit.RUNSTDBY = 1;  
+  while (GCLK->STATUS.reg & GCLK_STATUS_SYNCBUSY);
+  
+  
+  USB->DEVICE.CTRLA.reg &= ~USB_CTRLA_ENABLE;        // disable USBwhile (USB->STATUS.bit.SYNCBUSY) {}
+  NVMCTRL->CTRLB.bit.SLEEPPRM = NVMCTRL_CTRLB_SLEEPPRM_DISABLED_Val; //???
+  // SCB->SCR |= SCB_SCR_SLEEPDEEP_Msk; //Causes perpetual sleep.
+  // Due to a hardware bug on the SAMD21, the SysTick interrupts become
+  // active before the flash has powered up from sleep, causing a hard fault.
+  // To prevent this the SysTick interrupts are disabled before entering sleep
+  // mode.
+  SysTick->CTRL &= ~SysTick_CTRL_TICKINT_Msk; // Disable SysTick interrupts
+  SysTick->CTRL  &= ~SysTick_CTRL_ENABLE_Msk;        // disable ms clock
+  
+  SCB->SCR &= ~SCB_SCR_SLEEPDEEP_Msk;
+  
+  //PM->SLEEP.reg = 2;
+  __DSB();    //Complete all operations
   __WFI();    //Enter sleep mode
   //...Sleep...wait for interrupt
-  USB->DEVICE.CTRLA.reg |= USB_CTRLA_ENABLE;         // enable USB
-  detachInterrupt(INT1);                             // turn interrupt off
+  //USB->DEVICE.CTRLA.reg |= USB_CTRLA_ENABLE;         // enable USB
   SysTick->CTRL  |= SysTick_CTRL_ENABLE_Msk;         // Enable clock
+  SysTick->CTRL |= SysTick_CTRL_TICKINT_Msk;         // Enable SysTick interrupts
+  detachInterrupt(INT1);                             // turn interrupt off
   Debug = 0;
 }
+
 
 void ISR() {     // dummy routine - no interrupt activity needed
   byte SLEEP_FLAG = false;
